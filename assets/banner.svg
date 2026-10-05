@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-labelledby="title desc">
+  <title id="title">Paced Affinity</title>
+  <desc id="desc">Get the most tokens out of your Claude and Codex accounts. Three account usage bars pace toward their reset markers while a chat stays attached to its warm cache.</desc>
+  <defs>
+    <linearGradient id="card" x2="1" y2="1"><stop stop-color="#f7fafc"/><stop offset="1" stop-color="#eef5f5"/></linearGradient>
+    <linearGradient id="blue"><stop stop-color="#3c7de6"/><stop offset="1" stop-color="#64a4f5"/></linearGradient>
+    <linearGradient id="teal"><stop stop-color="#159a88"/><stop offset="1" stop-color="#45bca7"/></linearGradient>
+    <linearGradient id="violet"><stop stop-color="#7e6bd5"/><stop offset="1" stop-color="#a495ee"/></linearGradient>
+  </defs>
+  <rect x="1" y="1" width="1278" height="318" rx="24" fill="url(#card)" stroke="#cedcde" stroke-width="2"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif">
+    <g transform="translate(54 42)">
+      <circle cx="17" cy="17" r="16" fill="none" stroke="#178b7e" stroke-width="2"/>
+      <circle cx="17" cy="17" r="9" fill="none" stroke="#178b7e" stroke-width="2"/>
+      <circle cx="17" cy="17" r="3" fill="#178b7e"/>
+      <path d="M17 17 33 1m-1 0h-6m7 0v7" fill="none" stroke="#178b7e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="49" y="23" font-size="13" font-weight="700" letter-spacing="2" fill="#4c6570">CPA SCHEDULER PLUGIN</text>
+    </g>
+    <text x="54" y="146" font-size="58" font-weight="750" letter-spacing="-2" fill="#18333e">Paced Affinity</text>
+    <text x="57" y="190" font-size="23" fill="#445e69">Get the most tokens out of your</text>
+    <text x="57" y="223" font-size="23" fill="#445e69">Claude &amp; Codex accounts.</text>
+    <g fill="#178b7e"><circle cx="61" cy="268" r="3"/><circle cx="230" cy="268" r="3"/><circle cx="421" cy="268" r="3"/></g>
+    <g font-size="14" font-weight="600" fill="#49616c">
+      <text x="73" y="273">Keep caches warm</text><text x="242" y="273">Pace toward resets</text><text x="433" y="273">Use every allowance</text>
+    </g>
+    <path d="M704 48v224" stroke="#d7e3e6"/>
+    <g transform="translate(757 38)">
+      <text x="0" y="20" font-size="12" font-weight="700" letter-spacing="1.5" fill="#5f747f">ACCOUNTS, IN RHYTHM</text>
+      <text x="430" y="20" text-anchor="end" font-size="12" fill="#5f747f">reset</text>
+      <path d="M419 35v201" stroke="#9aafb6" stroke-width="1.5" stroke-dasharray="3 6"/>
+      <g transform="translate(0 71)">
+        <circle cx="13" cy="13" r="13" fill="#e3edfb"/><circle cx="13" cy="10" r="3" fill="#3c7de6"/><path d="M7 19c0-7 12-7 12 0" fill="#3c7de6"/>
+        <rect x="44" width="375" height="26" rx="13" fill="#dfe8ed"/>
+        <rect x="44" width="271" height="26" rx="13" fill="url(#blue)"/>
+        <circle cx="419" cy="13" r="5" fill="#f4f8f9" stroke="#78949f" stroke-width="1.5"/>
+      </g>
+      <g transform="translate(0 138)">
+        <circle cx="13" cy="13" r="13" fill="#daf1eb"/><circle cx="13" cy="10" r="3" fill="#159a88"/><path d="M7 19c0-7 12-7 12 0" fill="#159a88"/>
+        <rect x="44" width="375" height="26" rx="13" fill="#dfe8ed"/>
+        <rect x="44" width="255" height="26" rx="13" fill="url(#teal)"/>
+        <circle cx="419" cy="13" r="5" fill="#f4f8f9" stroke="#78949f" stroke-width="1.5"/>
+      </g>
+      <g transform="translate(0 205)">
+        <circle cx="13" cy="13" r="13" fill="#ebe6f9"/><circle cx="13" cy="10" r="3" fill="#7e6bd5"/><path d="M7 19c0-7 12-7 12 0" fill="#7e6bd5"/>
+        <rect x="44" width="375" height="26" rx="13" fill="#dfe8ed"/>
+        <rect x="44" width="266" height="26" rx="13" fill="url(#violet)"/>
+        <circle cx="419" cy="13" r="5" fill="#f4f8f9" stroke="#78949f" stroke-width="1.5"/>
+      </g>
+      <path d="M278 133v-22q0-12 12-12h39" fill="none" stroke="#159a88" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="278" cy="138" r="4" fill="#f7fafc" stroke="#159a88" stroke-width="2"/>
+      <g transform="translate(329 84)">
+        <path d="M0 8a8 8 0 0 1 8-8h82a8 8 0 0 1 8 8v22a8 8 0 0 1-8 8H19l-9 8v-8H8a8 8 0 0 1-8-8Z" fill="#fff" stroke="#aacbc5"/>
+        <path d="M13 13h17m-17 7h11" stroke="#178b7e" stroke-width="2" stroke-linecap="round"/>
+        <text x="39" y="23" font-size="11" font-weight="600" fill="#178b7e">warm chat</text>
+      </g>
+    </g>
+  </g>
+</svg>
