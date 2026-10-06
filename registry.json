@@ -4,7 +4,7 @@
     {
       "id": "paced-affinity",
       "name": "Paced Affinity",
-      "description": "Routes each chat to the subscription account that gets the most tokens: keeps chats on their warm prompt cache, paces every account to its 5-hour and weekly resets, and spends allowance before it expires. Claude + Codex.",
+      "description": "Routes Claude and Codex chats with warm-cache affinity, observed weekly pacing for new Claude chats, and quota-aware placement and failover.",
       "author": "Pandoks",
       "repository": "https://github.com/Pandoks/cpa-plugin-paced-affinity",
       "homepage": "https://github.com/Pandoks/cpa-plugin-paced-affinity",

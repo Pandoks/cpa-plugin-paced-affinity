@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Writes the replay traces for equivalence_test.go:  python3 testdata/gen_traces.py
+"""Writes the original projected-policy replay traces for equivalence_test.go.
+The Go replay explicitly selects claude-placement: projected; these traces are
+not the contract for the observed-weekly default. Run: python3 testdata/gen_traces.py
 
 An event-driven Claude Code / Codex workload (sessions, subagents, forks, resumed sessions, failover after 429s,
 proxy cooldowns, async usage records) runs against simulated subscription meters, and the reference router

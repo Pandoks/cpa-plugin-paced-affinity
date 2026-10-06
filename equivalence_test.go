@@ -13,7 +13,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-// A trace (testdata/gen_traces.py) is what the plugin saw while the reference router (testdata/reference/winner.py)
+// A projected-policy trace (testdata/gen_traces.py) is what the plugin saw while the reference router (testdata/reference/winner.py)
 // made every pick; replaying it through the ABI dispatch must reproduce each pick exactly.
 type trace struct {
 	Accounts [][3]any `json:"accounts"` // id, provider, weight, in the reference's account order
@@ -64,6 +64,9 @@ func replay(t *testing.T, file string) (picks, mismatches int) {
 	provider, weight := map[string]string{}, map[string]string{}
 	start := func() { // a fresh plugin knowing the reference's static account list
 		p = newPlugin()
+		// These immutable Python traces specify the original projected policy.
+		call[map[string]any](t, p, pluginabi.MethodPluginRegister,
+			map[string][]byte{"config_yaml": []byte("claude-placement: projected\n")}, 0)
 		for _, a := range tr.Accounts {
 			id, prov, w := a[0].(string), a[1].(string), a[2].(float64)
 			p.r.account(id, prov, w)

@@ -133,7 +133,9 @@ func (p *plugin) dispatch(method string, req []byte, now float64) (out []byte) {
 	case pluginabi.MethodManagementRegister:
 		return envelope(map[string]any{"routes": []map[string]string{{"Method": http.MethodGet, "Path": statusPath}}}, nil)
 	case pluginabi.MethodManagementHandle:
-		body, err := json.Marshal(p.r.status(now / 60))
+		status := p.r.status(now / 60)
+		status["claude_placement"] = p.cfg.Load().ClaudePlacement
+		body, err := json.Marshal(status)
 		return envelope(pluginapi.ManagementResponse{StatusCode: http.StatusOK,
 			Headers: http.Header{"Content-Type": {"application/json"}}, Body: body}, err)
 	case pluginabi.MethodPluginQuiesce, pluginabi.MethodPluginShutdown:
@@ -154,7 +156,7 @@ func (p *plugin) pick(raw []byte, now float64) pluginapi.SchedulerPickResponse {
 	if sid == "" || !cfg.routes(provider) {
 		return pluginapi.SchedulerPickResponse{}
 	}
-	a, reason := p.r.pick(provider, sid, parent, req.Candidates, now/60)
+	a, reason := p.r.pick(provider, sid, parent, req.Candidates, now/60, cfg.ClaudePlacement)
 	resp := pluginapi.SchedulerPickResponse{AuthID: a.id, Handled: !cfg.Shadow} // shadow: decided, not routed
 	// CPA's log formatter drops unknown fields, so the decision goes into the message.
 	hostLog("debug", fmt.Sprintf("paced-affinity: %s -> %s (%s of %d, handled=%v)", sid, a.id, reason,

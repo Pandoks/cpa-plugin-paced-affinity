@@ -8,12 +8,13 @@ is available. It uses signals already visible to CLIProxyAPI (CPA) and sends no 
 
 1. **Keep warm chats together.** A chat stays on its account for a sliding hour, unless that account
    is rate-limited. Each request refreshes the binding's lifetime.
-2. **Place by projected room.** New, idle, and failed-over chats prefer the account with the most
-   allowance projected to remain at its next five-hour reset, measured in absolute units.
-3. **Leave a margin.** Stop assigning new chats when projected usage would exceed 95% of the
-   five-hour allowance or 97% of the weekly allowance, subject to the weekly expiry waiver below.
-4. **Use allowance before it expires.** As weekly demand approaches capacity, give more weight to
-   allowance projected to expire unused.
+2. **Pace new Claude main chats by observed weekly usage.** Favor the account furthest behind its
+   elapsed-week spending target. Use the latest observed five-hour usage for admission.
+3. **Leave a margin.** The default new-Claude rule uses a 95% observed five-hour margin and the
+   existing 97% projected weekly margin, with the weekly expiry waiver below. Other placements
+   retain the original projected five-hour margin.
+4. **Keep projected placement for other work.** Resumed chats with retained history, subagents,
+   failover and Codex still combine projected absolute room with allowance likely to expire unused.
 5. **Handle weekly-only Codex plans separately.** Prefer expiring allowance, reopen expired windows
    first, and use remaining weekly room when no account has allowance projected to expire unused.
 6. **Separate subagents; preserve forks.** Subagents get their own binding because they do not read
@@ -30,7 +31,52 @@ After more than an hour of inactivity, the next request is placed again. A rate 
 placement on an eligible account. The margin controls admission of new chats; it does not move an
 existing warm chat merely because another account now looks better.
 
-## Placing chats with five-hour limits
+## First placement of a Claude main chat
+
+The default `claude-placement: observed-weekly` policy changes only a Claude main chat with no
+retained binding and no retained successful-usage history. All other placement paths keep the
+projected policy below. Warm bindings take precedence in either mode.
+
+For each candidate, use the elapsed fraction of its own seven-day window to set a spending target:
+
+```text
+elapsed fraction = clamp(1 − minutes until weekly reset ÷ 10080, 0, 1)
+target = min(1.1 × elapsed fraction, 1)
+deficit = target − observed weekly usage
+```
+
+The largest deficit wins, even if all deficits are negative. This compares fractions of each
+account's allowance; it does not multiply the deficit by plan size. Equal deficits are broken by
+the original projected absolute headroom, then by candidate order.
+
+| Account | Weekly used | Reset in | Target | Deficit |
+| --- | ---: | --- | ---: | ---: |
+| **A** | **80%** | **1 day** | **94.3%** | **+14.3 percentage points** |
+| B | 70% | 6 days | 15.7% | −54.3 percentage points |
+
+**A gets the new main chat** if it passes the guards. A is behind the spending schedule for a week
+that ends soon. B has more unused allowance but is early in its week.
+
+Admission requires observed five-hour usage at or below 95%; an expired short window counts as
+zero. The existing projected weekly usage must still be at or below 97%, unless allowance is
+projected to expire unused. Known exhausted accounts are excluded while a live candidate exists.
+If no candidate passes these guards, the original projected fallback supplies the choice.
+
+Observed usage can accept work that the recent-burn forecast would reject after a short burst. It
+can also admit too much simultaneous work before another response updates the headers. This rule
+does not reserve capacity, guarantee room for a whole chat, poll providers or send extra requests.
+Weekly projections, capacity learning and session burn estimates remain in use.
+
+Set `claude-placement: projected` to restore the original rule for these new main chats. The
+management status response reports `claude_placement`. A binding expires after one idle hour;
+successful session history remains for seven idle days, so an idle root with retained history still
+uses projected placement.
+
+## Projected placement with five-hour limits
+
+This is the original policy, preserved for Codex and other placement paths in both modes. It also
+handles all new Claude main chats when `claude-placement: projected` is selected. The Python
+`testdata/reference/winner.py` contract and its replay fixtures specify this policy.
 
 For each eligible account, estimate how much allowance would remain at its next reset if its recent
 burn rate continued:
@@ -176,6 +222,7 @@ Keep `routing.session-affinity: true` so that fallback routing preserves chat af
 Set `shadow: true` to log the plugin's decisions while CPA's built-in selector continues routing.
 This lets you inspect the proposed choices before enabling them.
 
-The measured benefits come from simulation and a real CPA process using stubbed accounts, not live
-subscription accounts. See [benchmarks](benchmarks.md) for methods, results, and limitations, or
+The historical benchmark benefits describe the projected policy, from simulation and a real CPA
+process using stubbed accounts, not live subscriptions. They do not establish live gains for the
+new observed-weekly default. See [benchmarks](benchmarks.md) for methods, results, and limitations, or
 return to the [installation guide](../README.md#installation).

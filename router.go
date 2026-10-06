@@ -8,12 +8,14 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-// The routing rule is winner.py v4 (testdata/reference), decision for decision.
+// Projected placement preserves winner.py v4 (testdata/reference), decision for decision.
+// The default only changes the first placement of a Claude main chat.
 const (
 	affinityTTL    float64 = 60 // sliding: a warm chat is never moved voluntarily
 	margin5h       float64 = 0.05
 	marginWeekly   float64 = 0.03
 	weeklyWeight   float64 = 2
+	weeklyLanding  float64 = 1.1         // elapsed-week target, capped at the full allowance
 	gateLo, gateHi float64 = 0.4, 0.7    // weekly pressure that switches the weekly-expiry term on
 	sessionTTL     float64 = 7 * 24 * 60 // forget idle sessions (winner.py keeps them forever)
 )
@@ -58,7 +60,7 @@ func (r *router) account(id, provider string, weight float64) *account {
 }
 
 // pick returns the account for this request and why: "affinity" (live binding), "placed" or "failover".
-func (r *router) pick(provider, sid, parent string, cands []pluginapi.SchedulerAuthCandidate, t float64) (*account, string) {
+func (r *router) pick(provider, sid, parent string, cands []pluginapi.SchedulerAuthCandidate, t float64, placement claudePlacement) (*account, string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sweep(t)
@@ -80,7 +82,14 @@ func (r *router) pick(provider, sid, parent string, cands []pluginapi.SchedulerA
 	} else {
 		burn = r.newSessionBurn(provider, t)
 	}
-	a, reason := r.place(cs, t, burn), "placed"
+	var a *account
+	if placement == observedWeeklyPlacement && provider == "claude" && kind == kindMain &&
+		r.bindings[key] == nil && r.sessions[sid] == nil {
+		a = r.placeObservedWeekly(cs, t, burn)
+	} else {
+		a = r.place(cs, t, burn)
+	}
+	reason := "placed"
 	if old != nil {
 		reason = "failover"
 		if a != old && kind == kindMain {
@@ -89,6 +98,37 @@ func (r *router) pick(provider, sid, parent string, cands []pluginapi.SchedulerA
 	}
 	r.bindings[key] = &binding{a, t}
 	return a, reason
+}
+
+// placeObservedWeekly spends the account furthest behind its elapsed-week target.
+// It guards observed 5h usage, retains projected weekly safety and breaks ties by
+// the original projected absolute headroom. If no account passes, place supplies
+// the original fallback rather than leaving the request unhandled.
+func (r *router) placeObservedWeekly(cands []*account, t, burn float64) *account {
+	fallback := r.place(cands, t, burn)
+	hasLive := slices.ContainsFunc(cands, func(a *account) bool { return !a.exhausted(t) })
+	best := fallback
+	bestScore, bestH := math.Inf(-1), math.Inf(-1)
+	for _, a := range cands {
+		if hasLive && a.exhausted(t) {
+			continue
+		}
+		p := a.project(t, burn)
+		observed5 := 0.0
+		if a.r5 > t {
+			observed5 = a.u5
+		}
+		if observed5 > 1-margin5h || !(p.projW <= 1-marginWeekly || p.eW > 0) {
+			continue
+		}
+		uW, ttrW := a.weekly(t)
+		target := min(weeklyLanding*min(max(1-ttrW/week, 0), 1), 1)
+		score, h := target-uW, min(p.h5, p.hW)
+		if score > bestScore || score == bestScore && h > bestH {
+			best, bestScore, bestH = a, score, h
+		}
+	}
+	return best
 }
 
 // place picks the feasible account with the most projected headroom (absolute units, so plan sizes compare),

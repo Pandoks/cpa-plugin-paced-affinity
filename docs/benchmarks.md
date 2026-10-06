@@ -3,9 +3,80 @@
 **Paced Affinity** was evaluated in simulation and with a real CLIProxyAPI process routing to
 stubbed accounts. These are controlled experiments, not measurements from live subscriptions.
 
+The follow-up section measures the current `observed-weekly` default, which changes only the first
+placement of Claude main chats. All later historical sections describe the original
+`claude-placement: projected` policy. The retained Python decision replays select `projected`
+explicitly; separate ABI fixtures protect the observed-weekly decision contract.
+
 > [!IMPORTANT]
 > Subscription limits and their token accounting are not published. These results show what the
 > scheduler did under the tested assumptions; they do not promise a particular real-account gain.
+
+## Current observed-weekly follow-up
+
+A follow-up replay uses seven days of recorded chat metadata tiled into three weeks. It compares
+matched seeds under the same workload, account capacities, quota meters, cache rules and retry
+behavior. Raw served tokens include input, cached prompt reads/writes and output; they are not a
+measure of useful output alone. The larger pool assumes four Claude and three Codex accounts; the
+recorded smaller pool has three Claude and two Codex accounts. Plan capacities and subscription
+metering remain modeled assumptions. Captured metadata and private local audit artifacts are not
+included in this repository.
+
+### Updated rule against the original
+
+| Pool | Mean token change relative to original projected rule | Unadjusted 95% interval |
+| --- | ---: | ---: |
+| Larger, 4 Claude + 3 Codex | +0.142% | −0.040% to +0.323% |
+| Smaller, 3 Claude + 2 Codex | +0.238% | −0.206% to +0.683% |
+| Equal-weight mean across 39 sensitivity scenarios | +0.062% | −0.016% to +0.140% |
+
+Across those 39 scenarios, the updated rule has a higher mean in 25, a lower mean in 13 and an
+equal mean in one. Five intervals are wholly positive, two wholly negative and 32 cross zero.
+This supports a small average improvement in this replay, with unresolved uncertainty; it does
+not establish a gain for every workload. The production change affects previously unseen Claude
+main chats only; it retains the original weekly projection guard, warm affinity, Codex, subagent,
+fork, resumed-chat and failover paths. `claude-placement: projected` restores the original rule.
+
+### Fresh usage checks before each chat
+
+This comparison models someone checking every account's dashboard before each new human chat,
+choosing the most remaining quota and keeping the chosen account until it actually returns a
+429 or becomes ineligible. It checks again only when a replacement is needed. Internal agents
+inherit the human chat's account. It does **not** choose anew on every model request.
+
+Four rules were fixed before inspecting performance: maximize either the minimum or the mean of
+remaining five-hour/weekly percentages, with visible forks either continuing the parent or
+starting a separate chat. Weekly-only Codex accounts use their weekly percentage. Dashboard reads
+are free and instantaneous but retain modeled 30-second reporting lag and rounding; they are not
+an exact-meter oracle. Unlike Paced, these rules do not weight absolute plan capacity or account
+for weekly pace, reset urgency or predicted usage. Unavailable readings are treated as unknown,
+with zero observed usage; this is a modeling limitation.
+
+All 960 runs completed: four rules × eight scenario assumptions × 30 matched seeds. Thirty
+duplicate controls matched all 49 saved output fields and were excluded from new evidence.
+The table reports **manual relative to the current observed-weekly plugin**, so negatives mean
+manual switching serves fewer tokens:
+
+| Pool | Per-chat quota score, forks continue parent | Mean manual token change | Unadjusted 95% interval |
+| --- | --- | ---: | ---: |
+| Larger, 4 Claude + 3 Codex | Minimum remaining percentage | −2.820% | −3.260% to −2.380% |
+| Larger, 4 Claude + 3 Codex | Mean remaining percentage | −3.017% | −3.414% to −2.620% |
+| Smaller, 3 Claude + 2 Codex | Minimum remaining percentage | −1.801% | −2.273% to −1.330% |
+| Smaller, 3 Claude + 2 Codex | Mean remaining percentage | −1.365% | −1.841% to −0.890% |
+
+Including the separate-fork variants, manual rules serve 2.82–3.36% fewer tokens in the larger
+pool and 1.14–1.80% fewer in the smaller pool. All four clearly lose in seven of eight scenario
+assumptions; the eighth has an unresolved difference. The larger-pool Codex-only difference is
+unresolved; smaller-pool Codex favors the plugin. Manual rules rebuild less cache in this replay
+but leave more weekly quota unused. Better allocation around resets is a plausible explanation,
+not a separately isolated causal result.
+
+Means average 30 paired-seed percentage ratios; two-sided intervals use Student-t with 29 degrees
+of freedom. Aggregate intervals first average correlated scenario assumptions within each seed.
+These intervals describe seed variation, not calibration error, uncertain capacities or the
+representativeness of one recorded history. Neither these manual choices nor live performance
+were observed. This comparison does not establish a universally best router. The older
+fill-one-account hand-switching policy below is a different comparator.
 
 ## Methodology
 
@@ -78,8 +149,9 @@ maxed is within noise; routing cannot create more allowance.
 | Weekly allowance expiring unused | 1.09% | 1.80% |
 
 The reported ±0.11 has no specified uncertainty method; it should not be read as a confidence
-interval. In this suite, Paced Affinity served 2.7% more tokens than switching accounts by hand
-and approximately 2.7% more than fill-first. The best tested built-in configuration, weighted
+interval. In this historical suite, Paced Affinity served 2.7% more tokens than the fill-one-account
+hand-switching rule, which moves all chats together, and approximately 2.7% more than fill-first.
+The best tested built-in configuration, weighted
 round-robin with independent subagents, improved on the baseline by only 0.16%.
 
 For scale, a hypothetical workload serving about eight billion tokens per week would gain about

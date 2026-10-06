@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -12,17 +13,25 @@ import (
 
 var version = "dev" // set by `make build`
 
+type claudePlacement string
+
+const (
+	observedWeeklyPlacement claudePlacement = "observed-weekly"
+	projectedPlacement      claudePlacement = "projected"
+)
+
 // config is plugins.configs.paced-affinity; CPA itself handles enabled and priority.
 type config struct {
-	Shadow    bool     `yaml:"shadow"`    // decide and log, but let the built-in selector route
-	Providers []string `yaml:"providers"` // providers this plugin routes
+	Shadow          bool            `yaml:"shadow"`           // decide and log, but let the built-in selector route
+	Providers       []string        `yaml:"providers"`        // providers this plugin routes
+	ClaudePlacement claudePlacement `yaml:"claude-placement"` // placement for previously unseen Claude main chats
 }
 
 func parseConfig(raw []byte) (*config, error) {
 	var req struct {
 		ConfigYAML []byte `json:"config_yaml"`
 	}
-	cfg := &config{}
+	cfg := &config{ClaudePlacement: observedWeeklyPlacement}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, err
@@ -36,6 +45,11 @@ func parseConfig(raw []byte) (*config, error) {
 	}
 	for i, p := range cfg.Providers {
 		cfg.Providers[i] = strings.ToLower(strings.TrimSpace(p))
+	}
+	switch cfg.ClaudePlacement {
+	case observedWeeklyPlacement, projectedPlacement:
+	default:
+		return nil, fmt.Errorf("claude-placement must be observed-weekly or projected, got %q", cfg.ClaudePlacement)
 	}
 	return cfg, nil
 }
@@ -58,6 +72,8 @@ func registration() map[string]any {
 					Description: "Compute and log decisions at debug level, but let the built-in selector route."},
 				{Name: "providers", Type: pluginapi.ConfigFieldTypeArray,
 					Description: "Providers to route (default [claude, codex]); others go to the built-in selector."},
+				{Name: "claude-placement", Type: pluginapi.ConfigFieldTypeString,
+					Description: "Previously unseen Claude main chats: observed-weekly (default), or projected for the original placement rule."},
 			},
 		},
 		"capabilities": map[string]bool{"scheduler": true, "usage_plugin": true, "management_api": true},
