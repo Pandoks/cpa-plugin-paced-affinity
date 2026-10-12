@@ -10,6 +10,7 @@ proxy cooldowns, async usage records) runs against simulated subscription meters
 
 The adapter between the two mirrors the plugin (signals.go, router.go observe, account.go profiles):
   kind     ":agent:" in the session id -> subagent; otherwise a parent session -> fork; otherwise main
+  subagent follows its parent's binding (the reference's subagent_rule="inherit")
   prior    credential weight x per-provider capacity
   headers  parsed like the plugin; a missing window keeps its last value; a 429 without any window is ignored;
            a Codex window shorter than a day is the 5h window and marks the account as having one
@@ -53,7 +54,7 @@ class CountingRouter(W.Router):
 
 def session_key(sid, parent):
     if ":agent:" in sid:
-        return W.SUBAGENT, sid
+        return W.SUBAGENT, (parent or sid).split(":agent:")[0]
     if parent:
         return W.FORK, parent
     return W.MAIN, sid
@@ -118,7 +119,8 @@ class Gen:
     def router(self):
         return CountingRouter([W.Account(i, a["prov"], "", a["prov"] == "claude", a["weight"] * PRIORS[a["prov"]][0],
                                          a["weight"] * PRIORS[a["prov"]][1], hour_anchor=a["prov"] == "claude",
-                                         weekly_first_use=a["prov"] == "codex") for i, a in enumerate(self.acc)])
+                                         weekly_first_use=a["prov"] == "codex") for i, a in enumerate(self.acc)],
+                              W.Config(subagent_rule="inherit"))
 
     # ---------------------------------------------------------------- event queue
     def at(self, t, fn, *args):

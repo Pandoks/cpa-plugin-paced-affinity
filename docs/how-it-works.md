@@ -17,8 +17,9 @@ is available. It uses signals already visible to CLIProxyAPI (CPA) and sends no 
    failover and Codex still combine projected absolute room with allowance likely to expire unused.
 5. **Handle weekly-only Codex plans separately.** Prefer expiring allowance, reopen expired windows
    first, and use remaining weekly room when no account has allowance projected to expire unused.
-6. **Separate subagents; preserve forks.** Subagents get their own binding because they do not read
-   the parent's cache. Forks follow the parent.
+6. **Keep subagents and forks with their parent.** A subagent's first request reuses the prefix its
+   parent cached, and that cache exists only on the parent's account. Subagents and forks therefore
+   follow the parent's binding, as CPA's `session-affinity-subagents` does.
 
 ## Keeping a warm chat in place
 
@@ -206,7 +207,7 @@ allowance is already on pace to be consumed.
 | `anthropic-ratelimit-unified-5h` / `7d` utilization and reset headers | Observe Claude window usage and reset times |
 | `x-codex-primary` / `secondary` used-percent, window-minutes, reset-at headers | Identify Codex windows and observe usage |
 | Token usage in responses | Estimate recent burn and refine capacity estimates |
-| Claude Code and Codex session and agent IDs | Track chat bindings, independent subagents, and forks |
+| Claude Code and Codex session and agent IDs | Track chat bindings and keep subagents and forks with their parent |
 | Existing CPA credential `weight` | Supply the initial relative capacity estimate |
 
 > [!NOTE]

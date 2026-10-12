@@ -16,13 +16,15 @@ const (
 	kindFork
 )
 
-// sessionKey maps CPA's canonical session ids to an agent kind and the binding it uses. Claude Code subagents
-// share the parent's session and get ids like "claude:<session>:agent:<agent-id>"; they don't read the parent's
-// cache, so they get their own binding. Any other session with a parent is a fork and follows the family.
+// sessionKey maps CPA's canonical session ids to an agent kind and the binding it uses. Subagents get ids like
+// "claude:<session>:agent:<agent-id>" (Codex: "codex:<session>:agent:<name>") and start from the prefix their
+// parent cached, so like CPA's session-affinity-subagents they follow the parent's binding; a nested subagent
+// follows the chat above its parent agent. Any other session with a parent is a fork and follows the family.
 func sessionKey(sid, parent string) (int, string) {
 	switch {
 	case strings.Contains(sid, ":agent:"):
-		return kindSubagent, sid
+		family, _, _ := strings.Cut(cmp.Or(parent, sid), ":agent:")
+		return kindSubagent, family
 	case parent != "":
 		return kindFork, parent
 	}

@@ -83,6 +83,12 @@ fill-one-account hand-switching policy below is a different comparator.
 The baseline is CLIProxyAPI's built-in round-robin with session affinity: a one-hour binding, with
 subagents inheriting the parent's account. It represents a well-configured default.
 
+> [!NOTE]
+> These results predate subagents following their parent's account. The simulation modeled
+> subagents as not reading the parent's cache and gave them independent bindings. Live CPA logs
+> later showed that a subagent's first request reads the parent's cached prefix, so subagents now
+> follow the parent, like the baseline. The simulations have not been rerun.
+
 | Test bed | Coverage | What it checks |
 | --- | --- | --- |
 | Simulation | 112 situations × 30 runs | Tokens served, cache movement, and allowance use across workloads |

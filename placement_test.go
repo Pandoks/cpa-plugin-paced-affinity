@@ -92,6 +92,19 @@ func TestClaudePlacement(t *testing.T) {
 				{at: 6, sid: "root", candidates: "abc", observed: "c", prior: "c"},
 				{at: 3700, sid: "root", candidates: "abc", observed: "c", prior: "c"},
 			}},
+		{"subagents follow the parent's account", "claude", []float64{5, 20},
+			[]placementQuota{{used5: .1, usedW: .8, days: 1}, {used5: .1, usedW: .7, days: 6}},
+			[]placementStep{
+				{sid: "root", candidates: "a", observed: "a", prior: "a"},
+				{at: 1, sid: "root:agent:child", parent: "root", candidates: "ab", observed: "a", prior: "a"},
+				{at: 2, sid: "root:agent:nested", parent: "root:agent:child", candidates: "ab", observed: "a", prior: "a"},
+			}},
+		{"Codex subagents follow the parent's account", "codex", []float64{5, 20},
+			[]placementQuota{{used5: .1, usedW: .8, days: 1}, {used5: .1, usedW: .7, days: 6}},
+			[]placementStep{
+				{sid: "root", candidates: "a", observed: "a", prior: "a"},
+				{at: 1, sid: "root:agent:child", parent: "root", candidates: "ab", observed: "a", prior: "a"},
+			}},
 		{"retained usage history without a binding", "claude", []float64{5, 20},
 			[]placementQuota{{used5: .1, usedW: .8, days: 1}, {used5: .1, usedW: .7, days: 6}},
 			[]placementStep{

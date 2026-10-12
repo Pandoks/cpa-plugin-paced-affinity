@@ -52,7 +52,7 @@ Use the same plugin store to install future releases.
 
 - **Codex, resumed Claude chats, subagents and failover:** use projected placement in either mode.
   Weekly-only Codex accounts prioritize allowance at risk of expiring unused.
-- **Subagents** get independent bindings; **forks** follow their parent.
+- **Subagents** and **forks** follow their parent's account, where the prefix they reuse is cached.
 - Unsupported providers, missing chat identity or plugin errors fall back to CPA's selector.
 
 Both modes keep warm bindings and projected weekly checks. If no account passes the
