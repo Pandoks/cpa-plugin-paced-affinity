@@ -8,8 +8,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-// Projected placement preserves winner.py v4 (testdata/reference), decision for decision.
-// The default only changes the first placement of a Claude main chat.
 const (
 	affinityTTL    float64 = 60 // sliding: a warm chat is never moved voluntarily
 	margin5h       float64 = 0.05
@@ -60,7 +58,7 @@ func (r *router) account(id, provider string, weight float64) *account {
 }
 
 // pick returns the account for this request and why: "affinity" (live binding), "placed" or "failover".
-func (r *router) pick(provider, sid, parent string, cands []pluginapi.SchedulerAuthCandidate, t float64, placement claudePlacement) (*account, string) {
+func (r *router) pick(provider, model, sid, parent string, cands []pluginapi.SchedulerAuthCandidate, t float64) (*account, string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sweep(t)
@@ -74,7 +72,7 @@ func (r *router) pick(provider, sid, parent string, cands []pluginapi.SchedulerA
 		if slices.Contains(cs, b.acct) && !b.acct.exhausted(t) {
 			return b.acct, "affinity"
 		}
-		old = b.acct // cooling down after a 429, or known to be exhausted
+		old = b.acct // cooling down after a 429, or reported exhausted
 	}
 	var burn float64
 	if s := r.sessions[sid]; s != nil {
@@ -82,12 +80,23 @@ func (r *router) pick(provider, sid, parent string, cands []pluginapi.SchedulerA
 	} else {
 		burn = r.newSessionBurn(provider, t)
 	}
-	var a *account
-	if placement == observedWeeklyPlacement && provider == "claude" && kind == kindMain &&
-		r.bindings[key] == nil && r.sessions[sid] == nil {
-		a = r.placeObservedWeekly(cs, t, burn)
-	} else {
-		a = r.place(cs, t, burn)
+	choose := func(cs []*account) *account {
+		if provider == "claude" && kind == kindMain && r.bindings[key] == nil && r.sessions[sid] == nil {
+			return r.placeObservedWeekly(cs, t, burn)
+		}
+		return r.place(cs, t, burn)
+	}
+	a := choose(cs)
+	// A Claude chat starts by sending its model's tools and system prompt, which other chats sent too; on an
+	// account that served them within the cache TTL it reads them instead of writing them again.
+	if provider == "claude" {
+		ck := cacheKey(model, kind)
+		warm := slices.DeleteFunc(slices.Clone(cs), func(w *account) bool { return t-w.seen[ck] > cacheTTL(kind) })
+		if len(warm) > 0 && !slices.Contains(warm, a) {
+			if w := choose(warm); w.admits(t, burn) {
+				a = w
+			}
+		}
 	}
 	reason := "placed"
 	if old != nil {
@@ -236,12 +245,13 @@ func (r *router) transfer(sid string, from, to *account, t float64) {
 	to.active[sid] = t
 }
 
-// observe feeds one usage record (one per upstream attempt, 429s included) into the account and session state.
+// observe feeds one successful response's usage record into the account and session state. A 429 needs no
+// handling here: CPA keeps the account out of the candidates until the reset its headers announce.
 func (r *router) observe(rec *pluginapi.UsageRecord, now float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	a := r.accounts[rec.AuthID]
-	if a == nil {
+	if a == nil || rec.Failed {
 		return
 	}
 	w5, wW := quotaWindows(a.provider, rec.ResponseHeaders, now)
@@ -255,17 +265,12 @@ func (r *router) observe(rec *pluginapi.UsageRecord, now float64) {
 	if wW.ok {
 		uW, rW = wW.util, wW.reset
 	}
-	t := now / 60
-	switch {
-	case !rec.Failed:
-		r.response(a, t, rec.SessionID, rec.ParentSessionID, rec.Detail, u5, r5, uW, rW)
-	case rec.Failure.StatusCode == 429 && (w5.ok || wW.ok):
-		a.reject(t, u5, r5, uW, rW)
-	}
+	r.response(a, now/60, rec.Model, rec.SessionID, rec.ParentSessionID, rec.Detail, u5, r5, uW, rW)
 }
 
-func (r *router) response(a *account, t float64, sid, parent string, d pluginapi.UsageDetail, u5, r5, uW, rW float64) {
+func (r *router) response(a *account, t float64, model, sid, parent string, d pluginapi.UsageDetail, u5, r5, uW, rW float64) {
 	kind, key := sessionKey(sid, parent)
+	a.seen[cacheKey(model, kind)] = t
 	cost := tokenCost(a, kind, d)
 	var d5, dW float64 // the first observation (e.g. after a restart mid-window) only records the headers
 	if a.tObs >= 0 {

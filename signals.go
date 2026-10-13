@@ -17,9 +17,9 @@ const (
 )
 
 // sessionKey maps CPA's canonical session ids to an agent kind and the binding it uses. Subagents get ids like
-// "claude:<session>:agent:<agent-id>" (Codex: "codex:<session>:agent:<name>") and start from the prefix their
-// parent cached, so like CPA's session-affinity-subagents they follow the parent's binding; a nested subagent
-// follows the chat above its parent agent. Any other session with a parent is a fork and follows the family.
+// "claude:<session>:agent:<agent-id>" (Codex: "codex:<session>:agent:<name>"); like CPA's session-affinity-subagents
+// they follow the family's binding, which keeps a family's subagents where their shared prompt prefix is cached. A
+// nested subagent follows the chat above its parent agent. Any other session with a parent is a fork and follows it.
 func sessionKey(sid, parent string) (int, string) {
 	switch {
 	case strings.Contains(sid, ":agent:"):
@@ -29,6 +29,24 @@ func sessionKey(sid, parent string) (int, string) {
 		return kindFork, parent
 	}
 	return kindMain, sid
+}
+
+// cacheKey names the prompt prefix a request shares with other chats: its model's tools and the system prompt of
+// its kind of agent.
+func cacheKey(model string, kind int) string {
+	if kind == kindSubagent {
+		return model + "/subagent"
+	}
+	return model
+}
+
+// cacheTTL is how long, in minutes, a shared prefix stays readable after the last request that sent it, less a
+// margin: Claude Code caches main chats for an hour and subagents for five minutes.
+func cacheTTL(kind int) float64 {
+	if kind == kindSubagent {
+		return 4
+	}
+	return 55
 }
 
 // pickProvider is the provider shared by every candidate (mixed-mode picks leave Provider empty).
