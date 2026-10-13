@@ -2,16 +2,22 @@
 
 ## What it does
 
-A [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) plugin that routes Claude and
-Codex chats across your subscription accounts. It keeps warm chats on the same account and
-balances five-hour and weekly quotas. It uses usage data CPA already receives, without extra requests.
+A [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) plugin that routes Claude and Codex chats across
+your subscription accounts. It keeps CPA's session affinity and adds quota and cache awareness: new chats go where
+their prompt is already cached and allowance is available, and accounts at their limit are left alone, including a
+Codex account that would otherwise keep running on paid credits. It uses usage data CPA already receives, without
+extra requests.
+
+In a replay of nine days of recorded traffic, it used 4% less Claude quota for the same work than CPA's built-in
+routing, and 10–100% fewer Codex credits depending on how much room the Codex accounts had; see
+[benchmarks](docs/benchmarks.md).
 
 ## Installation
 
 <a id="plugin-store"></a>
 <a id="compatibility"></a>
 
-Built for **CPA v8.0.12 with native plugins enabled (CGO)**. Supported platforms:
+Built for **CPA v8.0.27 with native plugins enabled (CGO)**. Supported platforms:
 **linux/amd64, linux/arm64, darwin/arm64**. Configure your Claude/Codex accounts in CPA first.
 
 1. Merge this into CPA's `config.yaml`, keeping your existing settings and store sources:
@@ -26,56 +32,39 @@ Built for **CPA v8.0.12 with native plugins enabled (CGO)**. Supported platforms
        paced-affinity:
          enabled: true
          priority: 1
-         shadow: false
-         providers: [claude, codex]
-         claude-placement: observed-weekly
 
    routing:
      session-affinity: true
    ```
 
-2. Open CPA's management panel, refresh the plugin store, and install **Paced Affinity v0.1.1**.
-3. Restart CPA. Confirm the plugin is registered and enabled, with `shadow: false`.
+2. Open CPA's management panel, refresh the plugin store, and install **Paced Affinity**.
+3. Restart CPA. Confirm the plugin is registered and enabled.
 
-Use the same plugin store to install future releases.
+Use the same plugin store to install future releases. Upgrading from v0.1: `shadow`, `providers` and
+`claude-placement` are no longer read and can be deleted.
 
 ## How it works
 
-- **Warm chats:** keep their account for one hour after the latest request; move when the account
-  becomes unavailable or rate-limited.
-- **New Claude main chats:** choose their first account using `claude-placement`:
+- **Warm chats** keep their account for an idle hour, like CPA's session affinity, and move only when the account
+  is rate-limited or reports its limit reached.
+- **Subagents and forks** start on their parent's account.
+- **New Claude chats** go to an account that served the same model within the cache lifetime, when one has room:
+  every chat begins with the same tools and system prompt, often 200k tokens, which such an account reads from cache
+  instead of writing again.
+- Among accounts with room, a new Claude main chat goes to the account furthest behind its weekly spending pace;
+  other placements weigh projected headroom against weekly allowance that would otherwise expire unused.
+- An account reporting 100% usage gets no new work while another has room. CPA already holds back accounts that
+  returned a 429; a Codex account paying with credits never does.
+- Unsupported providers, requests without a chat identity, and plugin errors fall back to CPA's selector.
 
-  | Mode | Placement rule |
-  | --- | --- |
-  | **`observed-weekly` (default)** | Check observed five-hour usage and projected weekly usage, then favor the account furthest behind its elapsed-week spending target. |
-  | `projected` | Forecast five-hour and weekly usage; favor projected remaining capacity and weekly allowance at risk of expiring unused. |
-
-- **Codex, resumed Claude chats, subagents and failover:** use projected placement in either mode.
-  Weekly-only Codex accounts prioritize allowance at risk of expiring unused.
-- **Subagents** and **forks** follow their parent's account, where the prefix they reuse is cached.
-- Unsupported providers, missing chat identity or plugin errors fall back to CPA's selector.
-
-Both modes keep warm bindings and projected weekly checks. If no account passes the
-`observed-weekly` checks, the original projected rule supplies the fallback.
+See [how it works](docs/how-it-works.md) for the rules and worked examples.
 
 ## Settings
 
 <a id="configuration"></a>
 
-Unprefixed settings below belong under `plugins.configs.paced-affinity`.
-The values shown match the installation example.
+The plugin has no settings of its own; `enabled` and `priority` are CPA's. `routing.session-affinity: true` keeps
+CPA's fallback routing sticky.
 
-| Setting | Value shown | What it does |
-| --- | --- | --- |
-| `plugins.enabled` | `true` | Enables CPA's plugin system. |
-| `plugins.dir` | `~/.cli-proxy-api/plugins` | Where CPA installs and loads plugin libraries. |
-| `plugins.store-sources` | Registry URL above | Adds this plugin to CPA's store catalog. |
-| `enabled` | `true` | Enables Paced Affinity; `false` disables it. |
-| `priority` | `1` | Order among scheduler plugins; higher numbers run first. |
-| `shadow` | `false` | `false`: route requests. `true`: compute/debug-log choices while CPA routes. |
-| `providers` | `[claude, codex]` | Providers this plugin handles. |
-| `claude-placement` | `observed-weekly` | New Claude main-chat placement: `observed-weekly` or `projected`. |
-| `routing.session-affinity` | `true` | Keeps CPA's fallback routing sticky. |
-
-Each credential's CPA **`weight`** seeds its relative capacity: for example, Claude Pro `1`,
-Max 5x `5`, Max 20x `20`. Use relative plan sizes for Codex. Observed usage refines these estimates.
+A credential's CPA **`weight`** seeds the plugin's capacity estimate until usage headers arrive (Claude Pro `1`, Max 5x
+`5`, Max 20x `20`). It is optional: in the replay, setting plan sizes changed quota use by less than 0.15%.

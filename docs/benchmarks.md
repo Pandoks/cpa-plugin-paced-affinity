@@ -1,256 +1,166 @@
 # Benchmarks
 
-**Paced Affinity** was evaluated in simulation and with a real CLIProxyAPI process routing to
-stubbed accounts. These are controlled experiments, not measurements from live subscriptions.
-
-The follow-up section measures the current `observed-weekly` default, which changes only the first
-placement of Claude main chats. All later historical sections describe the original
-`claude-placement: projected` policy. The retained Python decision replays select `projected`
-explicitly; separate ABI fixtures protect the observed-weekly decision contract.
+**Paced Affinity** was measured by replaying nine days of recorded Claude Code and Codex traffic through simulated
+accounts, with the plugin's own code making every routing decision. At the capacity closest to the recording, it
+spent **4.0% less Claude quota per unit of work** than CPA's built-in routing and served the same work. Codex credits
+fell by **10% at the estimated capacity and by 42–100% when the accounts had more room**.
 
 > [!IMPORTANT]
-> Subscription limits and their token accounting are not published. These results show what the
-> scheduler did under the tested assumptions; they do not promise a particular real-account gain.
+> Subscription limits and their token accounting are not published, and account capacity is assumed. These results
+> show what the scheduler does with one user's recorded traffic under stated assumptions; they do not promise a
+> particular gain on live accounts.
 
-## Current observed-weekly follow-up
+## Results
 
-A follow-up replay uses seven days of recorded chat metadata tiled into three weeks. It compares
-matched seeds under the same workload, account capacities, quota meters, cache rules and retry
-behavior. Raw served tokens include input, cached prompt reads/writes and output; they are not a
-measure of useful output alone. The larger pool assumes four Claude and three Codex accounts; the
-recorded smaller pool has three Claude and two Codex accounts. Plan capacities and subscription
-metering remain modeled assumptions. Captured metadata and private local audit artifacts are not
-included in this repository.
+### Claude
 
-### Updated rule against the original
+Change in quota spent per unit of work against CPA's built-in routing; negative is better. Capacity multiplies the
+assumed plan allowances. At 1× and 1.25× demand exceeds capacity and requests go unserved; the recording itself
+shows about seven Claude 429s in a week, closer to 2× or 3×.
 
-| Pool | Mean token change relative to original projected rule | Unadjusted 95% interval |
-| --- | ---: | ---: |
-| Larger, 4 Claude + 3 Codex | +0.142% | −0.040% to +0.323% |
-| Smaller, 3 Claude + 2 Codex | +0.238% | −0.206% to +0.683% |
-| Equal-weight mean across 39 sensitivity scenarios | +0.062% | −0.016% to +0.140% |
+| Capacity | v0.1.1 | Subagents follow parent | **This version** | Work served by this version |
+| --- | ---: | ---: | ---: | ---: |
+| 1× | +1.23% (+0.88 to +1.57) | −0.72% (−1.04 to −0.40) | **−0.77% (−1.11 to −0.44)** | +0.10% (−1.49 to +1.69) |
+| 1.25× | +1.09% (+0.42 to +1.77) | −0.99% (−1.40 to −0.59) | **−1.54% (−1.93 to −1.16)** | −0.27% (−0.75 to +0.20) |
+| 1.5× | +0.62% (+0.11 to +1.13) | −1.79% (−2.07 to −1.51) | **−2.72% (−3.02 to −2.42)** | No change |
+| 2× | −0.78% (−1.12 to −0.43) | −2.79% (−2.99 to −2.59) | **−4.03% (−4.25 to −3.81)** | No change |
+| 3× | −1.37% (−1.73 to −1.01) | −2.82% (−3.08 to −2.56) | **−4.07% (−4.26 to −3.88)** | No change |
 
-Across those 39 scenarios, the updated rule has a higher mean in 25, a lower mean in 13 and an
-equal mean in one. Five intervals are wholly positive, two wholly negative and 32 cross zero.
-This supports a small average improvement in this replay, with unresolved uncertainty; it does
-not establish a gain for every workload. The production change affects previously unseen Claude
-main chats only; it retains the original weekly projection guard, warm affinity, Codex, subagent,
-fork, resumed-chat and failover paths. `claude-placement: projected` restores the original rule.
+Most of the difference is how often a chat's first request found its prompt prefix cached. At 2× capacity:
 
-### Fresh usage checks before each chat
+| Policy | New main chats starting cold | Subagents starting cold | 429s in nine days |
+| --- | ---: | ---: | ---: |
+| Built-in | 34.5% | 13.3% | 4.3 |
+| v0.1.1 | 20.9% | 21.1% | 0 |
+| Subagents follow parent | 23.9% | 7.0% | 0 |
+| **This version** | **12.8%** | **5.5%** | **0** |
 
-This comparison models someone checking every account's dashboard before each new human chat,
-choosing the most remaining quota and keeping the chosen account until it actually returns a
-429 or becomes ineligible. It checks again only when a replacement is needed. Internal agents
-inherit the human chat's account. It does **not** choose anew on every model request.
+Built-in round-robin hands each new chat to the next account, often one that has been idle past the cache lifetime.
+v0.1.1 placed subagents by headroom, away from the accounts where their prefix was cached. Following the parent fixes
+the subagents; preferring warm accounts fixes most of the new chats.
 
-Four rules were fixed before inspecting performance: maximize either the minimum or the mean of
-remaining five-hour/weekly percentages, with visible forks either continuing the parent or
-starting a separate chat. Weekly-only Codex accounts use their weekly percentage. Dashboard reads
-are free and instantaneous but retain modeled 30-second reporting lag and rounding; they are not
-an exact-meter oracle. Unlike Paced, these rules do not weight absolute plan capacity or account
-for weekly pace, reset urgency or predicted usage. Unavailable readings are treated as unknown,
-with zero observed usage; this is a modeling limitation.
+The cost is under overload. Concentrating new chats on warm accounts drains them sooner: at 1× capacity this version
+served 0.81% less work than the subagent change alone (−1.56 to −0.05), and at 1.25× 0.48% less (−1.07 to +0.11).
+Against the built-in routing the difference is not significant at either capacity.
 
-All 960 runs completed: four rules × eight scenario assumptions × 30 matched seeds. Thirty
-duplicate controls matched all 49 saved output fields and were excluded from new evidence.
-The table reports **manual relative to the current observed-weekly plugin**, so negatives mean
-manual switching serves fewer tokens:
+### Codex
 
-| Pool | Per-chat quota score, forks continue parent | Mean manual token change | Unadjusted 95% interval |
+Units of Codex usage paid with credits over the nine days. The plugin keeps new work off an account that reports
+100% usage while the other has room; built-in routing keeps sending it work, which Pro then pays for with credits.
+
+| Codex capacity | Built-in | v0.1.1 | **This version** |
+| --- | ---: | ---: | ---: |
+| 1× (140M Pro, 75M ProLite a week) | 474.5M | 429.8M | **428.7M** |
+| 1.5× | 363.4M | 209.6M | **209.3M** |
+| 2× | 97.4M | 49.1M | **51.9M** |
+| 3× | 50.3M | 0 | **0** |
+
+At 1× both accounts are at their limit most of the time, and credits pay for demand no routing can place. Quota per
+unit of Codex work is the same for every policy within 0.3%.
+
+### Sensitivity
+
+This version against built-in routing and against the subagent change alone, Claude cost per unit of work:
+
+| Scenario | Capacity | vs built-in | vs subagents follow parent |
 | --- | --- | ---: | ---: |
-| Larger, 4 Claude + 3 Codex | Minimum remaining percentage | −2.820% | −3.260% to −2.380% |
-| Larger, 4 Claude + 3 Codex | Mean remaining percentage | −3.017% | −3.414% to −2.620% |
-| Smaller, 3 Claude + 2 Codex | Minimum remaining percentage | −1.801% | −2.273% to −1.330% |
-| Smaller, 3 Claude + 2 Codex | Mean remaining percentage | −1.365% | −1.841% to −0.890% |
+| Cache reads count 0.1 | 1.25× | −0.17% (−0.51 to +0.17) | +0.09% (−0.26 to +0.44) |
+| Cache reads count 0.1 | 2× | −1.30% (−1.47 to −1.14) | −0.41% (−0.55 to −0.28) |
+| No cache-write premium | 1.25× | −1.64% (−1.83 to −1.45) | −0.66% (−0.81 to −0.50) |
+| No cache-write premium | 2× | −2.86% (−2.97 to −2.75) | −0.79% (−0.87 to −0.71) |
+| Output counts 8 | 1.25× | −1.59% (−1.88 to −1.31) | −0.67% (−0.93 to −0.40) |
+| Output counts 8 | 2× | −3.51% (−3.71 to −3.30) | −1.14% (−1.29 to −1.00) |
+| Four Max 20x | 1.25× | −3.18% (−3.26 to −3.10) | −0.95% (−1.13 to −0.76) |
+| Four Max 20x | 2× | −3.84% (−3.90 to −3.77) | −1.33% (−1.43 to −1.23) |
+| Max 20x, three Max 5x | 1.25× | −1.06% (−1.57 to −0.55) | −0.50% (−0.84 to −0.15) |
+| Max 20x, three Max 5x | 2× | −2.78% (−3.19 to −2.38) | −0.61% (−0.79 to −0.42) |
+| Two Max 20x, one Max 5x | 1.25× | −0.77% (−0.98 to −0.55) | −0.75% (−1.02 to −0.49) |
+| Two Max 20x, one Max 5x | 2× | −2.72% (−2.90 to −2.55) | −1.12% (−1.23 to −1.00) |
 
-Including the separate-fork variants, manual rules serve 2.82–3.36% fewer tokens in the larger
-pool and 1.14–1.80% fewer in the smaller pool. All four clearly lose in seven of eight scenario
-assumptions; the eighth has an unresolved difference. The larger-pool Codex-only difference is
-unresolved; smaller-pool Codex favors the plugin. Manual rules rebuild less cache in this replay
-but leave more weekly quota unused. Better allocation around resets is a plausible explanation,
-not a separately isolated causal result.
+With cache reads counted at 0.1, this version also served 0.70% less work than the subagent change alone at 1.25×
+(−1.41 to 0.00), and with output counted at 8, 0.65% less (−1.16 to −0.14).
 
-Means average 30 paired-seed percentage ratios; two-sided intervals use Student-t with 29 degrees
-of freedom. Aggregate intervals first average correlated scenario assumptions within each seed.
-These intervals describe seed variation, not calibration error, uncertain capacities or the
-representativeness of one recorded history. Neither these manual choices nor live performance
-were observed. This comparison does not establish a universally best router. The older
-fill-one-account hand-switching policy below is a different comparator.
+Setting each credential's `weight` to its plan size changed Claude cost per unit of work by −0.11% (−0.28 to +0.05)
+at 1.25× and −0.06% (−0.21 to +0.09) at 2×, and Codex credits by under 0.1%: the plugin learns capacity from usage
+headers within minutes, so the weight is optional.
 
-## Methodology
+### Alternatives that lost
 
-The baseline is CLIProxyAPI's built-in round-robin with session affinity: a one-hour binding, with
-subagents inheriting the parent's account. It represents a well-configured default.
+Measured with the same replay during development, against this version or its warm-cache rule:
 
-> [!NOTE]
-> These results predate subagents following their parent's account. The simulation modeled
-> subagents as not reading the parent's cache and gave them independent bindings. Live CPA logs
-> later showed that a subagent's first request reads the parent's cached prefix, so subagents now
-> follow the parent, like the baseline. The simulations have not been rerun.
-
-| Test bed | Coverage | What it checks |
+| Alternative | Result | Decision |
 | --- | --- | --- |
-| Simulation | 112 situations × 30 runs | Tokens served, cache movement, and allowance use across workloads |
-| Heavy mixed-plan simulation | 16 situations × 30 runs | Claude Max 20x + Max 5x + Max 5x, alongside Codex Pro + Business ProLite |
-| Real CLIProxyAPI v8.0.12 with stubbed accounts | Eight paired runs per case; compressed time | Plugin loading, routing, failures, headers, and cache movement through the proxy |
-| Decision replay | 128,000 picks | Agreement between the Go implementation and the Python reference |
+| No forecasting: pace and admit on observed usage only | 0.05–0.47% more quota per unit of work, 0.6% less work served under overload, 15% more Codex credits | Kept forecasting |
+| Projected placement for new Claude main chats | Same cost within 0.15 points, 0.5 points less work served at 1× | Removed `claude-placement` |
+| Warm-cache preference only above 50% or 80% of the best account's room, only under low weekly pressure, or only below 80% five-hour use | None recovered the overload loss; they gave back up to 0.7 points of the gain | Kept the plain rule |
+| Warm-cache preference for Codex too | 14% more credits at 2× Codex capacity | Claude only |
+| Keeping the plugin's own 429 handling | Identical results in every scenario: CPA already holds the account back | Removed |
 
-The main simulation covers Claude pools of two to five accounts, mixed plan sizes, Codex Pro and
-Plus, light through overloaded demand, five-hour and weekly bottlenecks, staggered and aligned
-resets, long contexts, subagent swarms, and uncertainty in token accounting.
+## What the replay does
 
-The mixed-plan suite regularly exhausts both five-hour and weekly allowances. Its cache-movement
-counts cover three-week runs. The proxy test bed uses real CLIProxyAPI against simulated Claude and
-Codex endpoints, with time compressed to exercise resets. Neither test bed uses real subscription
-accounts.
+`sim_test.go` replays every model response recorded on the author's machine from 2026-10-04 07:36 to 2026-10-13
+08:12 UTC: 53,184 Claude Code responses (main chats, subagents and workflow agents) and 59,847 Codex responses.
+`testdata/extract.py` reads them from Claude Code transcripts and Codex session logs: time, chat and subagent IDs,
+model, uncached input, cache reads and writes, and output. Each policy routes the same requests:
 
-Token gains below are relative to the baseline, unless another comparison is named. Counts of
-situations are separate from counts of repeated runs. Lower cache waste, forced moves, and expired
-allowance are better.
-
-## Overall simulation results
-
-| Metric | Paced Affinity | Baseline |
-| --- | ---: | ---: |
-| Tokens served, all situations | +0.51% | Reference |
-| Tokens served, when accounts run out | +0.66% | Reference |
-| Tokens served, Codex | +0.96% | Reference |
-| Situations with more / fewer / equal tokens | 45 / 0 / 67 | Reference |
-| Forced warm-cache moves per week | 9.4 | 12.9 |
-| Usage spent rebuilding caches | 1.61% | 2.07% |
-| Claude weekly allowance expiring unused | 0.98% | 1.42% |
-
-The gain is modest because session affinity already does much of the work. The plugin improves
-where new chats land and how accounts approach resets, while keeping warm chats in place.
-
-### Gain by load
-
-| Provider | Workload | Token gain |
-| --- | --- | ---: |
-| Claude | Five-hour windows maxed, 1.1× demand | +0.52% |
-| Claude | Five-hour windows heavily maxed, 1.6× demand | +1.54% |
-| Claude | Weekly demand right at capacity | +0.79% |
-| Claude | Weekly demand at 1.4× capacity | +0.37% |
-| Claude | Weekly saturated | +0.15% |
-| Claude | Both five-hour and weekly limits maxed, 1.5–2.5× demand | +0.12% |
-| Codex | At capacity | +1.50% |
-| Codex | At 1.4× capacity | +1.06% |
-| Codex | Saturated | +0.40% |
-
-The largest gains appear near capacity or when five-hour windows constrain throughput. Far beyond
-all limits, every strategy drains every account. The +0.12% Claude result when both limits are
-maxed is within noise; routing cannot create more allowance.
-
-### Heavy mixed plans
-
-| Metric | Paced Affinity | Baseline |
-| --- | ---: | ---: |
-| Tokens served, overall | +0.64% ±0.11 | Reference |
-| Tokens served, Claude | +0.55% | Reference |
-| Tokens served, Codex | +0.79% | Reference |
-| Situations with more / fewer / equal tokens | 10 / 0 / 6 | Reference |
-| Forced warm-cache moves per three-week run | 36.2 | 43.8 |
-| Usage spent rebuilding caches | 1.51% | 1.80% |
-| Weekly allowance expiring unused | 1.09% | 1.80% |
-
-The reported ±0.11 has no specified uncertainty method; it should not be read as a confidence
-interval. In this historical suite, Paced Affinity served 2.7% more tokens than the fill-one-account
-hand-switching rule, which moves all chats together, and approximately 2.7% more than fill-first.
-The best tested built-in configuration, weighted
-round-robin with independent subagents, improved on the baseline by only 0.16%.
-
-For scale, a hypothetical workload serving about eight billion tokens per week would gain about
-50 million tokens per week at +0.64%. This is arithmetic, not a measured production workload.
-
-## Other routing policies
-
-These are simulated policies, including built-in-style strategies. The table does not imply that
-each policy is a separately selectable CLIProxyAPI feature. Comparisons are against the same
-built-in round-robin plus session-affinity baseline.
-
-| Policy | Token change vs. baseline |
-| --- | ---: |
-| Paced Affinity | +0.51% |
-| Same decision rules with perfect information | +0.49% |
-| Weighted round-robin by plan size | +0.04% |
-| Pacing without weekly urgency | −0.25% |
-| Switching by hand: fill one account, then move everything | −1.47% |
-| Soonest-reset-first | −1.52% |
-| Fill-first | −1.76% |
-| No stickiness: split requests evenly | −9.68% |
-
-The perfect-information variant uses the same decision rules, so it is not an oracle for the
-best possible scheduling policy. Its +0.49% result was no better than the measured-input version.
-
-### What lost and why
-
-The following explanations describe the scheduling tradeoffs behind these tested policies; the
-aggregate results do not isolate a separate causal effect for each tradeoff.
-
-- **Fill-first** concentrates chats on one account until it hits a limit. Moving those warm chats
-  then consumes allowance rebuilding caches on another account.
-- **Soonest-reset-first** considers the clock without enough regard for available capacity or burn
-  rate. An early reset does not necessarily make an account a good home for another chat.
-- **No stickiness** repeatedly changes accounts. Claude caches are per organization, so spreading a
-  warm chat across accounts can turn cheap reads into expensive cache writes.
-- **Switching by hand** moves all chats when the current account fills, causing a wave of warm-cache
-  rebuilds rather than placing new chats before the account reaches its limit.
-- **Pacing without weekly urgency** can leave weekly allowance unused at reset even when its
-  five-hour placement decisions look reasonable.
-
-## Real proxy, stubbed accounts
-
-CLIProxyAPI v8.0.12 loaded the plugin and the plugin routed every request in this test bed. The
-accounts and provider responses were stubbed. Each case used eight paired runs with compressed
-time, so these results validate integration under controlled conditions.
-
-| Case | Result vs. baseline |
+| Policy | What it is |
 | --- | --- |
-| Three Claude accounts | +2.0% finished requests; −65% failed client attempts |
-| Claude Max 20x + Max 5x + Max 5x | −36% forced warm moves; cache-rebuild waste 3.6% → 2.1% |
-| Subagent-heavy Claude workload | −53% forced warm moves; cache-rebuild waste 2.6% → 0.9% |
-| Codex weekly expiry cases | Weekly allowance expiring unused 5.3–7.9% → ≤0.5% |
-| Saturated weekly workload | Tie |
-| Go implementation vs. Python reference | Identical decisions on 128,000 replayed picks |
+| Built-in | CPA's round-robin with session affinity and `session-affinity-subagents`, as configured during the recording |
+| v0.1.1 | The release that ran from 2026-10-06 19:55, with independent subagent bindings |
+| Subagents follow parent | v0.1.1 with subagents on their parent's binding |
+| This version | Also places new Claude chats on warm caches, without its own 429 handling |
 
-Finished requests and failed client attempts are different measures from simulated token
-throughput; their percentages should not be combined into a single gain.
+The plugin runs unmodified behind its ABI, with CPA's behavior around it: candidates exclude an account that returned
+a 429 until the reset it announced (plus CPA's 1–30 s fuzz), a failed attempt retries on the remaining accounts, and
+round-robin rotates per model.
 
-The harness caught a bug in an earlier version: a strict 3% weekly safety margin stranded the last
-≤3% of allowance in saturated weeks. The expiring-allowance waiver lets an account use that margin
-when allowance would otherwise expire unused. Both test beds confirmed the fix.
+- **Accounts.** Claude: two Max 20x and two Max 5x accounts with five-hour and weekly windows, at 110M and 500M units
+  for Max 20x and a quarter of that for Max 5x (an earlier calibration). Weekly phase and starting usage are unknown
+  and drawn per seed. Codex: Pro and Business ProLite with the twelve weekly windows the logs show, early resets
+  included, at 140M and 75M units a week, estimated from stretches when one account served everything. An account
+  with credits, as the logs show for Pro, keeps serving past its limit.
+- **Meter.** API price ratios: cache read 0.05, five-minute write 1.25, one-hour write 2 and output 5 times uncached
+  input for Claude, with Sonnet at 0.6 and Haiku at 0.2 times Opus; cache read 0.1 and output 5 for Codex.
+- **Caches.** An account keeps a chat's cache for its lifetime after the chat's last request there: an hour for main
+  chats, five minutes for subagents, an hour for Codex. A chat without its own cache on the account reads only the
+  prefix shared by chats of the same model and kind, if one of them ran there within that lifetime, and writes the
+  rest. A request starts before its recorded completion by an estimated latency, and its writes become readable when
+  it completes, so parallel subagents cannot read each other's first writes.
+- **Measures.** *Quota per unit of work* is what a policy spent divided by what the same requests cost as recorded;
+  *work served* is the recorded cost of the requests that found an account. Each scenario runs 15 seeds, and changes
+  are paired by seed with 95% t-intervals.
 
-## Meter assumptions and sensitivity
+### Checked against the recording
 
-The experiments use API price ratios as a proxy for subscription usage. These ratios are model
-assumptions, not a claim that subscriptions meter tokens this way.
+Replaying each period with the routing that actually ran:
 
-| Token category | Claude Opus 5.5 | Codex |
-| --- | ---: | ---: |
-| Ordinary input | 1× | 1× |
-| Cached input read | 0.05× | 0.1× |
-| One-hour cache write | 2× | No write premium |
-| Five-minute cache write | 1.25× | No write premium |
-| Output | 5× | 5× |
+| Period | Policy | Claude quota, simulated vs recorded | New main chats cold, simulated / recorded | Subagents cold, simulated / recorded |
+| --- | --- | ---: | ---: | ---: |
+| 10-04 to 10-06 | Built-in | −0.6% | 20% / 34% | 15% / 22% |
+| 10-06 to 10-13 | v0.1.1 | −8.2% | 38% / 67% | 17% / 60% |
 
-For Claude main chats, these assumptions make a one-hour cache write about 40 times as costly as a
-cached read. The subscription-meter uncertainty is why sensitivity testing matters.
+Codex usage matches within 1% in both periods. The replay reproduces the built-in period's cost but finds caches
+warm more often than the recording did, and it reproduces only part of the cold starts v0.1.1 caused. Real accounts
+seem to lose the shared prefix more often than the model assumes, so the replay likely understates what warm
+placement and following the parent save.
 
-Sensitivity runs varied cache reads to 0.10× and 0.25×, output to 3× and 8×, and removed the cache
-write premium. Paced Affinity beat the baseline in all 16 sensitivity runs.
+## Limitations
 
-## Caveats
+- One person's nine days, in a period with a two-day burst of very heavy use.
+- Claude plan sizes, capacities and the meter are assumptions; the tables show how the results move with them.
+- CPA keeps a Codex websocket on one account for all its turns. The replay picks per request, so it overstates how
+  quickly any policy can move Codex work off an account that starts paying credits mid-connection.
+- An unserved request is counted once; a real client would retry later.
+- The shared prompt prefix is keyed by model and main chat versus subagent; real prefixes also vary with tool sets
+  and project instructions.
 
-- These results come from simulation and stubbed provider accounts, not live subscriptions.
-- Real subscription accounting, header availability, workload mix, and provider behavior may differ.
-- Time compression tests reset behavior but does not reproduce every production timing effect.
-- The baseline already has one-hour affinity. Comparing with an unconfigured or nonsticky setup
-  would overstate the benefit over a well-configured default.
-- The reported aggregates do not provide a confidence interval or prove that every future workload
-  will improve. The heaviest dual-limit result is within noise.
-- Capacity remains fixed. With light demand there may be nothing to recover; with overwhelming
-  demand there may be no unused allowance left for better routing to find.
+## Running it
 
-See [how it works](how-it-works.md) for the placement rules and worked examples, or return to the
-[README](../README.md) for installation and configuration.
+```sh
+make sim                                          # extract testdata/work.tsv from your logs, replay once
+SIM_POLICY=builtin SIM_SEEDS=15 go test -tags sim -run TestSim -count=1 .
+```
+
+Each run prints one JSON line per seed and provider. `SIM_PLANS` (for example `20x,5x`), `SIM_CLAUDE_SCALE`,
+`SIM_CODEX_CAPS`, `SIM_METER`, `SIM_WEIGHTS=plan`, `SIM_FROM` and `SIM_TO` change the assumptions. The extracted
+traffic stays local; `testdata/work.tsv*` is ignored by git.
