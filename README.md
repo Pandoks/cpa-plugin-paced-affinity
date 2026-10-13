@@ -66,5 +66,6 @@ See [how it works](docs/how-it-works.md) for the rules and worked examples.
 The plugin has no settings of its own; `enabled` and `priority` are CPA's. `routing.session-affinity: true` keeps
 CPA's fallback routing sticky.
 
-A credential's CPA **`weight`** seeds the plugin's capacity estimate until usage headers arrive (Claude Pro `1`, Max 5x
-`5`, Max 20x `20`). It is optional: in the replay, setting plan sizes changed quota use by less than 0.15%.
+A credential's CPA **`weight`** seeds the plugin's guess at the account's size until its usage headers have moved
+enough to measure it. Leave it unset: in the replay, plan-size weights changed Claude quota use by at most 0.22% and
+raised Codex credits in most scenarios.

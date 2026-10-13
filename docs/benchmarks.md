@@ -80,9 +80,12 @@ This version against built-in routing and against the subagent change alone, Cla
 With cache reads counted at 0.1, this version also served 0.70% less work than the subagent change alone at 1.25×
 (−1.41 to 0.00), and with output counted at 8, 0.65% less (−1.16 to −0.14).
 
-Setting each credential's `weight` to its plan size changed Claude cost per unit of work by −0.11% (−0.28 to +0.05)
-at 1.25× and −0.06% (−0.21 to +0.09) at 2×, and Codex credits by under 0.1%: the plugin learns capacity from usage
-headers within minutes, so the weight is optional.
+Setting each credential's `weight` to its plan size made no consistent difference. Over 40 seeds, Claude cost per
+unit of work changed by +0.02% (−0.08 to +0.12) at 1.25× and −0.15% (−0.23 to −0.07) at 2×; with the plugin
+restarting daily and forgetting what it had learned, by −0.22% (−0.35 to −0.09) and −0.05% (−0.12 to +0.02). Codex
+credits, one replay per scenario, rose in 11 of 12 combinations of 1×, 1.5× and 2× capacity with no restart or a
+restart every 12, 24 or 48 hours, by up to 37%. The weight only seeds an account's size until its usage headers have
+moved enough to measure it, so the plugin does not need it.
 
 ### Alternatives that lost
 
@@ -162,5 +165,5 @@ SIM_POLICY=builtin SIM_SEEDS=15 go test -tags sim -run TestSim -count=1 .
 ```
 
 Each run prints one JSON line per seed and provider. `SIM_PLANS` (for example `20x,5x`), `SIM_CLAUDE_SCALE`,
-`SIM_CODEX_CAPS`, `SIM_METER`, `SIM_WEIGHTS=plan`, `SIM_FROM` and `SIM_TO` change the assumptions. The extracted
-traffic stays local; `testdata/work.tsv*` is ignored by git.
+`SIM_CODEX_CAPS`, `SIM_METER`, `SIM_WEIGHTS=plan`, `SIM_RESTART_H` (hours between plugin restarts), `SIM_FROM` and
+`SIM_TO` change the assumptions. The extracted traffic stays local; `testdata/work.tsv*` is ignored by git.

@@ -503,7 +503,13 @@ func TestSim(t *testing.T) {
 		reqs := slices.Clone(work)
 		s := newSim(t, uint64(seed), reqs[0].start, strings.Split(envOr("SIM_PLANS", "20x,20x,5x,5x"), ","),
 			claudeScale, codexCap, windows, os.Getenv("SIM_WEIGHTS") == "plan", policy == "plugin")
+		restart, _ := strconv.ParseFloat(os.Getenv("SIM_RESTART_H"), 64) // hours between plugin restarts
+		next := reqs[0].start + restart*3600
 		for i := range reqs {
+			if s.p != nil && restart > 0 && reqs[i].start >= next { // a restart forgets what the plugin learned
+				s.p, next = newPlugin(), next+restart*3600
+				call[map[string]any](t, s.p, pluginabi.MethodPluginRegister, map[string][]byte{}, reqs[i].start)
+			}
 			s.serve(t, &reqs[i])
 		}
 		for len(s.pending) > 0 {

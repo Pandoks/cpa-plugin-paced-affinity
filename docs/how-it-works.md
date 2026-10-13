@@ -95,7 +95,8 @@ projected room = remaining allowance − recent burn rate × time until reset
 Room is measured in absolute capacity units, learned from how usage headers move as tokens are served, so a Max 20x
 account counts as about four times a Max 5x account at equal utilization. An idle account is treated as opening a
 fresh five-hour window now. Weekly allowance also caps room using a five-hour look-ahead: a fresh short window does not
-make an almost exhausted week usable. A credential's CPA `weight` seeds the capacity estimate until headers arrive.
+make an almost exhausted week usable. A credential's CPA `weight` seeds the capacity estimate until headers have
+moved enough to measure it.
 
 ### Adding weekly urgency
 
