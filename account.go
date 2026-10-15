@@ -3,7 +3,7 @@ package main
 import "math"
 
 // Times are minutes since the Unix epoch, utilization is a fraction of the window, usage is millions of
-// price-weighted tokens ("units"). Typed constants keep the arithmetic bit-identical to the reference.
+// price-weighted tokens ("units").
 const (
 	window5h        float64 = 300
 	week            float64 = 10080
@@ -43,11 +43,12 @@ type account struct {
 	sumDu5, sumW5, sumDuW, sumWW    float64 // online calibration: utilization deltas vs assumed units
 
 	active map[string]float64 // main session -> last activity
+	seen   map[string]float64 // cache key (model and agent kind) -> last response
 }
 
 func newAccount(id, provider string) *account {
 	return &account{profile: profiles[provider], id: id, provider: provider, r5: -1, rW: -1, tObs: -1,
-		active: map[string]float64{}}
+		active: map[string]float64{}, seen: map[string]float64{}}
 }
 
 func (a *account) setWeight(w float64) {
@@ -148,12 +149,8 @@ func (a *account) project(t, b float64) (p projection) {
 	return p
 }
 
-func (a *account) reject(t, u5, r5, uW, rW float64) {
-	if a.has5h && u5 >= 0.999 {
-		u5 = max(u5, 1)
-	}
-	a.u5, a.r5, a.uW, a.rW = u5, r5, uW, rW
-	if a.tObs < 0 {
-		a.tObs = t
-	}
+// fits reports whether new work passes the margins, waiving the weekly one for allowance that would otherwise expire
+// unused. An exhausted account never fits.
+func (p projection) fits() bool {
+	return p.proj5 <= 1-margin5h && (p.projW <= 1-marginWeekly || p.eW > 0)
 }

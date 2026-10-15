@@ -60,41 +60,26 @@ func pickRequest(provider, sid string, candidates ...string) pluginapi.Scheduler
 // Anything the plugin does not route itself must come back "not handled" so the built-in selector routes it.
 func TestPickFallsBackToBuiltin(t *testing.T) {
 	const now = 1790000000.0
-	configured := func(yaml string) *plugin {
-		p := newPlugin()
-		call[map[string]any](t, p, pluginabi.MethodPluginRegister, map[string][]byte{"config_yaml": []byte(yaml)}, now)
-		return p
-	}
 	mixed := pickRequest("claude", "claude:s1", "a")
 	mixed.Provider = "" // mixed-mode pick
 	mixed.Candidates = append(mixed.Candidates, pluginapi.SchedulerAuthCandidate{ID: "b", Provider: "codex"})
 	tests := []struct {
 		name string
-		p    *plugin
+		p    *router
 		req  any
 	}{
-		{"shadow", configured("shadow: true\n"), pickRequest("claude", "claude:s1", "a", "b")},
-		{"unknown provider", newPlugin(), pickRequest("gemini", "gemini:s1", "a")},
-		{"provider not configured", configured("providers: [claude]\n"), pickRequest("codex", "codex:s1", "x")},
-		{"mixed providers", newPlugin(), mixed},
-		{"no session", newPlugin(), pickRequest("claude", "", "a")},
-		{"malformed request", newPlugin(), "not a pick request"},
-		{"panic", &plugin{r: &router{}}, pickRequest("claude", "claude:s1", "a")}, // nil maps
+		{"unknown provider", newRouter(), pickRequest("gemini", "gemini:s1", "a")},
+		{"mixed providers", newRouter(), mixed},
+		{"no session", newRouter(), pickRequest("claude", "", "a")},
+		{"malformed request", newRouter(), "not a pick request"},
+		{"panic", &router{}, pickRequest("claude", "claude:s1", "a")}, // nil maps
 	}
 	for _, tt := range tests {
-		if tt.p.cfg.Load() == nil {
-			cfg, _ := parseConfig(nil)
-			tt.p.cfg.Store(cfg)
-		}
 		if got := call[pluginapi.SchedulerPickResponse](t, tt.p, pluginabi.MethodSchedulerPick, tt.req, now); got.Handled {
 			t.Errorf("%s: handled, picked %q", tt.name, got.AuthID)
 		}
 	}
-	shadow := tests[0].p
-	if len(shadow.r.bindings) != 1 {
-		t.Errorf("shadow mode should still decide and bind, got %d bindings", len(shadow.r.bindings))
-	}
-	if got := call[pluginapi.SchedulerPickResponse](t, newPlugin(), pluginabi.MethodSchedulerPick,
+	if got := call[pluginapi.SchedulerPickResponse](t, newRouter(), pluginabi.MethodSchedulerPick,
 		pickRequest("claude", "claude:s1", "a", "b"), now); !got.Handled || got.AuthID == "" {
 		t.Errorf("a routed pick should be handled, got %+v", got)
 	}
@@ -102,7 +87,7 @@ func TestPickFallsBackToBuiltin(t *testing.T) {
 
 // The host calls in from many goroutines; `make test` runs this under the race detector.
 func TestConcurrentCalls(t *testing.T) {
-	p := newPlugin()
+	p := newRouter()
 	var wg sync.WaitGroup
 	for g := range 8 {
 		wg.Go(func() {
@@ -112,7 +97,7 @@ func TestConcurrentCalls(t *testing.T) {
 				usage, _ := json.Marshal(pluginapi.UsageRecord{AuthID: "a", SessionID: sid, ResponseHeaders: http.Header{
 					"Anthropic-Ratelimit-Unified-5h-Utilization": {"0.5"}, "Anthropic-Ratelimit-Unified-5h-Reset": {"1790006400"}}})
 				for method, req := range map[string][]byte{pluginabi.MethodSchedulerPick: pick,
-					pluginabi.MethodUsageHandle: usage, pluginabi.MethodManagementHandle: nil} {
+					pluginabi.MethodUsageHandle: usage, pluginabi.MethodPluginReconfigure: nil} {
 					var env pluginabi.Envelope
 					if err := json.Unmarshal(p.dispatch(method, req, now), &env); err != nil || !env.OK {
 						t.Errorf("%s: %v %v", method, err, env.Error)
@@ -122,4 +107,22 @@ func TestConcurrentCalls(t *testing.T) {
 		})
 	}
 	wg.Wait()
+}
+
+// call sends one request through the ABI dispatch, as JSON like the host does.
+func call[T any](t *testing.T, p *router, method string, req any, now float64) T {
+	t.Helper()
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env pluginabi.Envelope
+	var out T
+	if err := json.Unmarshal(p.dispatch(method, raw, now), &env); err != nil || !env.OK {
+		t.Fatalf("%s: %s %v", method, env.Error, err)
+	}
+	if err := json.Unmarshal(env.Result, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
