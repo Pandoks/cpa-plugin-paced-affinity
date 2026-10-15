@@ -53,13 +53,7 @@ import (
 
 var version = "dev" // set by `make build`
 
-type plugin struct {
-	r *router
-}
-
-func newPlugin() *plugin { return &plugin{r: newRouter()} }
-
-var global = newPlugin()
+var global = newRouter()
 
 func main() {}
 
@@ -95,7 +89,7 @@ func cliproxyPluginShutdown() {}
 
 // dispatch serves one ABI call at unix time now (seconds). It never panics, and a pick that fails for any
 // reason is answered "not handled", so the built-in selector (and its session affinity) routes instead.
-func (p *plugin) dispatch(method string, req []byte, now float64) (out []byte) {
+func (r *router) dispatch(method string, req []byte, now float64) (out []byte) {
 	defer func() {
 		if v := recover(); v != nil {
 			hostLog("warn", fmt.Sprintf("paced-affinity: recovered from a panic in %s: %v", method, v))
@@ -109,11 +103,11 @@ func (p *plugin) dispatch(method string, req []byte, now float64) (out []byte) {
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
 		return envelope(registration(), nil)
 	case pluginabi.MethodSchedulerPick:
-		return envelope(p.pick(req, now), nil)
+		return envelope(r.handlePick(req, now), nil)
 	case pluginabi.MethodUsageHandle:
 		var rec pluginapi.UsageRecord
 		if json.Unmarshal(req, &rec) == nil {
-			p.r.observe(&rec, now)
+			r.observe(&rec, now)
 		}
 		return envelope(struct{}{}, nil)
 	case pluginabi.MethodPluginQuiesce, pluginabi.MethodPluginShutdown:
@@ -122,7 +116,7 @@ func (p *plugin) dispatch(method string, req []byte, now float64) (out []byte) {
 	return envelope(nil, fmt.Errorf("unknown method %q", method))
 }
 
-func (p *plugin) pick(raw []byte, now float64) pluginapi.SchedulerPickResponse {
+func (r *router) handlePick(raw []byte, now float64) pluginapi.SchedulerPickResponse {
 	var req pluginapi.SchedulerPickRequest
 	if json.Unmarshal(raw, &req) != nil {
 		return pluginapi.SchedulerPickResponse{}
@@ -130,10 +124,14 @@ func (p *plugin) pick(raw []byte, now float64) pluginapi.SchedulerPickResponse {
 	provider := pickProvider(&req)
 	sid, _ := req.Options.Metadata["canonical_session_id"].(string)
 	parent, _ := req.Options.Metadata["parent_session_id"].(string)
+	// The client's model, which usage records carry as Alias; req.Model may be a routed or auto-resolved name.
+	model, _ := req.Options.Metadata["requested_model"].(string)
 	if _, known := profiles[provider]; sid == "" || !known {
 		return pluginapi.SchedulerPickResponse{}
 	}
-	a, reason := p.r.pick(provider, req.Model, sid, parent, req.Candidates, now/60)
+	// With tool search on, siblings share only a small opening, so spreading Claude subagents beats grouping them.
+	own := provider == "claude" && toolSearch(req.Options.Headers)
+	a, reason := r.pick(provider, model, sid, parent, own, req.Candidates, now/60)
 	// CPA's log formatter drops unknown fields, so the decision goes into the message.
 	hostLog("debug", fmt.Sprintf("paced-affinity: %s -> %s (%s of %d)", sid, a.id, reason, len(req.Candidates)))
 	return pluginapi.SchedulerPickResponse{AuthID: a.id, Handled: true}

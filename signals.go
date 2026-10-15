@@ -16,19 +16,26 @@ const (
 	kindFork
 )
 
-// sessionKey maps CPA's canonical session ids to an agent kind and the binding it uses. Subagents get ids like
-// "claude:<session>:agent:<agent-id>" (Codex: "codex:<session>:agent:<name>"); like CPA's session-affinity-subagents
-// they follow the family's binding, which keeps a family's subagents where their shared prompt prefix is cached. A
-// nested subagent follows the chat above its parent agent. Any other session with a parent is a fork and follows it.
-func sessionKey(sid, parent string) (int, string) {
+// sessionKey returns a session's agent kind and binding key. A chat's subagents ("<chat>:agent:<id>") share prompt
+// prefixes with each other but never with the chat, so they share one binding of their own, unless own binds each
+// alone. The family comes from the id, as CPA gives a nested Codex subagent its parent thread as parent. Any other
+// session with a parent is a fork, which reads its parent's cache and so follows it.
+func sessionKey(sid, parent string, own bool) (int, string) {
 	switch {
+	case strings.Contains(sid, ":agent:") && own:
+		return kindSubagent, sid
 	case strings.Contains(sid, ":agent:"):
-		family, _, _ := strings.Cut(cmp.Or(parent, sid), ":agent:")
-		return kindSubagent, family
+		family, _, _ := strings.Cut(sid, ":agent:")
+		return kindSubagent, family + ":agent"
 	case parent != "":
 		return kindFork, parent
 	}
 	return kindMain, sid
+}
+
+// toolSearch reports whether Claude Code sent the request with tool search on (MCP tools deferred).
+func toolSearch(h http.Header) bool {
+	return strings.Contains(strings.Join(h.Values("Anthropic-Beta"), ","), "advanced-tool-use-")
 }
 
 // cacheKey names the prompt prefix a request shares with other chats: its model's tools and the system prompt of

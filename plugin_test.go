@@ -65,21 +65,21 @@ func TestPickFallsBackToBuiltin(t *testing.T) {
 	mixed.Candidates = append(mixed.Candidates, pluginapi.SchedulerAuthCandidate{ID: "b", Provider: "codex"})
 	tests := []struct {
 		name string
-		p    *plugin
+		p    *router
 		req  any
 	}{
-		{"unknown provider", newPlugin(), pickRequest("gemini", "gemini:s1", "a")},
-		{"mixed providers", newPlugin(), mixed},
-		{"no session", newPlugin(), pickRequest("claude", "", "a")},
-		{"malformed request", newPlugin(), "not a pick request"},
-		{"panic", &plugin{r: &router{}}, pickRequest("claude", "claude:s1", "a")}, // nil maps
+		{"unknown provider", newRouter(), pickRequest("gemini", "gemini:s1", "a")},
+		{"mixed providers", newRouter(), mixed},
+		{"no session", newRouter(), pickRequest("claude", "", "a")},
+		{"malformed request", newRouter(), "not a pick request"},
+		{"panic", &router{}, pickRequest("claude", "claude:s1", "a")}, // nil maps
 	}
 	for _, tt := range tests {
 		if got := call[pluginapi.SchedulerPickResponse](t, tt.p, pluginabi.MethodSchedulerPick, tt.req, now); got.Handled {
 			t.Errorf("%s: handled, picked %q", tt.name, got.AuthID)
 		}
 	}
-	if got := call[pluginapi.SchedulerPickResponse](t, newPlugin(), pluginabi.MethodSchedulerPick,
+	if got := call[pluginapi.SchedulerPickResponse](t, newRouter(), pluginabi.MethodSchedulerPick,
 		pickRequest("claude", "claude:s1", "a", "b"), now); !got.Handled || got.AuthID == "" {
 		t.Errorf("a routed pick should be handled, got %+v", got)
 	}
@@ -87,7 +87,7 @@ func TestPickFallsBackToBuiltin(t *testing.T) {
 
 // The host calls in from many goroutines; `make test` runs this under the race detector.
 func TestConcurrentCalls(t *testing.T) {
-	p := newPlugin()
+	p := newRouter()
 	var wg sync.WaitGroup
 	for g := range 8 {
 		wg.Go(func() {
@@ -110,7 +110,7 @@ func TestConcurrentCalls(t *testing.T) {
 }
 
 // call sends one request through the ABI dispatch, as JSON like the host does.
-func call[T any](t *testing.T, p *plugin, method string, req any, now float64) T {
+func call[T any](t *testing.T, p *router, method string, req any, now float64) T {
 	t.Helper()
 	raw, err := json.Marshal(req)
 	if err != nil {

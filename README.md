@@ -8,9 +8,15 @@ their prompt is already cached and allowance is available, and accounts at their
 Codex account that would otherwise keep running on paid credits. It uses usage data CPA already receives, without
 extra requests.
 
-In a replay of nine days of recorded traffic, it used 4% less Claude quota for the same work than CPA's built-in
-routing, and 10–100% fewer Codex credits depending on how much room the Codex accounts had; see
-[benchmarks](docs/benchmarks.md).
+[How it works](docs/how-it-works.md) has the rules: warm chats stay put, new main chats are paced by weekly usage,
+and a chat's subagents stay together unless Claude Code's tool search (which defers MCP tools) is on.
+
+In a replay of ten days of the author's traffic on simulated accounts at 0.9× to 1.25× the assumed plan allowances,
+it used 1.0–2.1% less Claude quota per unit of work (quota spent divided by what the same requests cost as recorded)
+than CPA's built-in round-robin or fill-first routing (each significant at 95%), and, at the estimated Codex capacity
+(weekly allowances estimated from the logs), 14% fewer paid Codex credits than round-robin and 30% fewer than
+fill-first. Account limits and plans in the replay are assumed, and under this plugin the replay finds caches warmer
+than the real traffic did, so it may overstate the gain. See [benchmarks](docs/benchmarks.md).
 
 ## Installation
 
@@ -40,32 +46,20 @@ Built for **CPA v8.0.27 with native plugins enabled (CGO)**. Supported platforms
 2. Open CPA's management panel, refresh the plugin store, and install **Paced Affinity**.
 3. Restart CPA. Confirm the plugin is registered and enabled.
 
-Use the same plugin store to install future releases. Upgrading from v0.1: `shadow`, `providers` and
-`claude-placement` are no longer read and can be deleted.
-
-## How it works
-
-- **Warm chats** keep their account for an idle hour, like CPA's session affinity, and move only when the account
-  is rate-limited or reports its limit reached.
-- **Subagents and forks** start on their parent's account.
-- **New Claude chats** go to an account that served the same model within the cache lifetime, when one has room:
-  every chat begins with the same tools and system prompt, often 200k tokens, which such an account reads from cache
-  instead of writing again.
-- Among accounts with room, a new Claude main chat goes to the account furthest behind its weekly spending pace;
-  other placements weigh projected headroom against weekly allowance that would otherwise expire unused.
-- An account reporting 100% usage gets no new work while another has room. CPA already holds back accounts that
-  returned a 429; a Codex account paying with credits never does.
-- Unsupported providers, requests without a chat identity, and plugin errors fall back to CPA's selector.
-
-See [how it works](docs/how-it-works.md) for the rules and worked examples.
+Use the same plugin store to install future releases. Upgrading from v0.1: `shadow: true` no longer stops routing;
+set `enabled: false` instead. `shadow`, `providers` and `claude-placement` are no longer read and can be deleted, and
+the management status endpoint (`/plugins/paced-affinity/status`) is removed.
 
 ## Settings
 
 <a id="configuration"></a>
 
-The plugin has no settings of its own; `enabled` and `priority` are CPA's. `routing.session-affinity: true` keeps
-CPA's fallback routing sticky.
+The plugin has no settings of its own; `enabled` and `priority` are CPA's. Keep `routing.session-affinity: true` so
+CPA's fallback routing stays sticky. Keep `model-level-cooling` false (CPA's default): the plugin relies on CPA benching the whole account after a usage-limit 429.
 
-A credential's CPA **`weight`** seeds the plugin's guess at the account's size until its usage headers have moved
-enough to measure it. Leave it unset: in the replay, plan-size weights changed Claude quota use by at most 0.22% and
-raised Codex credits in most scenarios.
+Optionally, set each credential's CPA `weight` to its plan size (Claude Pro 1, Max 5x 5, Max 20x 20; Codex Pro 24,
+Business ProLite 10). The plugin uses it only as a first guess at the account's size, until usage headers have moved
+enough to measure it. In the replay, plan weights helped Claude slightly after plugin restarts and moved Codex credits
+both ways ([sensitivity](docs/benchmarks.md#sensitivity)). The Codex values follow the plugin's built-in prior of
+about $60 of GPT usage a week per weight unit; the replay's estimated weekly allowances put Pro and ProLite closer to
+19:10.

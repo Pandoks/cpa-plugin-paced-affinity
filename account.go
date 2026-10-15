@@ -3,7 +3,7 @@ package main
 import "math"
 
 // Times are minutes since the Unix epoch, utilization is a fraction of the window, usage is millions of
-// price-weighted tokens ("units"). Typed constants keep the arithmetic bit-identical to the reference.
+// price-weighted tokens ("units").
 const (
 	window5h        float64 = 300
 	week            float64 = 10080
@@ -149,9 +149,8 @@ func (a *account) project(t, b float64) (p projection) {
 	return p
 }
 
-// admits reports whether new work fits the account's margins, waiving the weekly one for allowance that would
-// otherwise expire unused.
-func (a *account) admits(t, burn float64) bool {
-	p := a.project(t, burn)
-	return !a.exhausted(t) && p.proj5 <= 1-margin5h && (p.projW <= 1-marginWeekly || p.eW > 0)
+// fits reports whether new work passes the margins, waiving the weekly one for allowance that would otherwise expire
+// unused. An exhausted account never fits.
+func (p projection) fits() bool {
+	return p.proj5 <= 1-margin5h && (p.projW <= 1-marginWeekly || p.eW > 0)
 }

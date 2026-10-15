@@ -13,4 +13,4 @@ test:
 
 sim: # replay your own Claude Code and Codex logs; see docs/benchmarks.md
 	python3 -I testdata/extract.py testdata/work.tsv
-	go test -tags sim -run TestSim -count=1 .
+	go test -tags sim -run TestSim -count=1 -v .
