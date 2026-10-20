@@ -421,6 +421,7 @@ func (s *sim) headers(a *simAccount, t float64) http.Header {
 	h.Set("X-Codex-Primary-Used-Percent", f(math.Min(100, math.Floor(a.usedW/a.capW*100))))
 	h.Set("X-Codex-Primary-Window-Minutes", "10080")
 	h.Set("X-Codex-Primary-Reset-At", f(math.Floor(reset)))
+	h.Set("X-Codex-Credits-Has-Credits", map[bool]string{true: "True", false: "False"}[a.credits]) // as upstream sends it
 	return h
 }
 

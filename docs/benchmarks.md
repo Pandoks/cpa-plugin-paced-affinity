@@ -10,7 +10,7 @@ plan allowances ([capacity](#capacity)):
 | Claude [quota per unit of work](#terms), [as recorded](#terms) | −1.16% to −2.10%* | −1.01% to −1.48%* | −2.34% to −2.61%* |
 | Claude quota per unit of work, tool search on | −1.14% to −1.31%* | −1.44% to −1.55%* | −0.20% to −0.28%* |
 | Work served | −0.03% to +1.00% | +0.16% to +2.74% | −0.19% to +0.55% |
-| Codex credits at the estimated Codex capacity | −14% | −30% | −0.2% |
+| Codex credits at the estimated Codex capacity | −27% | −41% | −16% |
 
 Negative quota and credits mean this version spends less. Each quota cell spans 20 paired seeds per capacity (40 at 0.9×
 and 1× with tool search on), and every one is significant (`*`: its 95% paired interval excludes 0); the closest are
@@ -20,10 +20,11 @@ against v0.1.1 is more in one cell and less in one. Codex credits are the same i
 margins:
 
 - At 0.9× with tool search on it serves less work than v0.1.1; see [the work-served gap](#work-served-gap).
-- At 2×, where the accounts have room, it spent 0.4–3.1% less Claude quota than round-robin or fill-first. At 1.5×
-  the estimated Codex capacity, round-robin spent 0.9% fewer Codex credits.
+- At 2×, where the accounts have room, it spent 0.4–3.1% less Claude quota than round-robin or fill-first.
 - In the 1.6 days after tool search was turned on, fill-first was level with it at 2×.
 - With a daily plugin restart, its lead over fill-first at 1.25× as recorded shrinks to 0.33% (−0.49 to −0.17).
+- With a plugin restart every 24 or 6 hours, its Codex credits at the estimated capacity are 24% and 22% below
+  round-robin's instead of 27%, still without Codex 429s ([restarts](#codex-restarts)).
 
 The ten-day results were measured before the [expiring-allowance rule](#expiring-allowance) was added. On the ten-day
 recording, with tool search on, its effect on work served (0.9× and 1×) and quota per unit of work (0.9× to 1.25×) is
@@ -35,7 +36,7 @@ gain doesn't hold up when that recording's openings are estimated differently. W
 On that 27-day recording with tool search on, this version with the rule spent 0.68–0.90% less Claude quota per unit of
 work than round-robin, 0.26–1.23% less than fill-first at 0.7× to 2×, and 0.14–0.19% less than v0.1.1 at each of
 those capacities except 0.8×, where the 0.05% gap isn't significant. It served 0.73–3.34% more work than round-robin
-at 0.7× to 1× and as much as v0.1.1, with no gap at 0.9×. Its Codex credits were 2.7% above round-robin's.
+at 0.7× to 1× and as much as v0.1.1, with no gap at 0.9×. It paid 12% fewer Codex credits than round-robin.
 See [over 27 days](#27-days).
 
 > [!IMPORTANT]
@@ -317,32 +318,99 @@ Measured: without the rule, this version serves less than v0.1.1 on this recordi
 0.9× (0.55% at 0.9×, each `*`), so here the rule's 0.55–0.90% gain closes the gap. How the rule adds that work is
 inferred, as above. Against round-robin the quota saving is smaller than on the ten-day recording with tool search on:
 0.68–0.90% here, against 1.14–1.31% there. Codex is replayed the same in every seed and at every Claude capacity. At
-the estimated Codex capacity this version paid 1,096.7M units in credits over the 27 days: 2.7% more than round-robin
-(1,067.9M), unlike its 14% saving over ten days; 17% less than fill-first (1,323.5M); and 0.1% less than v0.1.1
-(1,097.7M). The replay doesn't trace why.
+the estimated Codex capacity this version paid 941.8M units in credits over the 27 days: 12% fewer than round-robin
+(1,067.9M), 29% fewer than fill-first (1,323.5M) and 14% fewer than v0.1.1 (1,097.7M). Before the
+[weekly-only Codex rule](#codex) it paid 1,096.7M, 2.7% more than round-robin; [Codex](#codex) traces why.
 
 ### Codex
 
-Units of Codex usage paid with credits over the ten days. The plugin keeps new work off an account that reports 100%
-usage while the other has room. Built-in routing keeps sending it work, which an account with credits pays for: Pro,
-and ProLite in one of its six recorded windows. Codex results are the same in every seed: its windows are replayed as
-recorded, and its routing doesn't depend on the Claude side.
+Units of Codex usage paid with credits. With the plugin kept running, this version pays the fewest at every capacity
+over both recordings, with no Codex 429s; with restarts every 6 or 24 hours it pays more than before at 2×
+([restarts](#codex-restarts)). The recorded pool is Pro, which has credits, and Business ProLite, which has them in
+only one recorded window (10-09 22:39 → 10-13 05:52), so the
+[weekly-only Codex rule](how-it-works.md#weekly-only-codex-accounts) applies: least-used share of the week first,
+ProLite held from 98% weekly usage, and a probe for early resets every 3 hours. *Before* is this version without that
+rule or its [start-up](how-it-works.md#codex-start-up) rule (commit 7b8eff0), which kept new work off an account at
+100% while the other had room. Codex results are the same in every seed: its windows are replayed as recorded, early
+resets included, and its routing doesn't depend on the Claude side.
 
-| Codex capacity | Round-robin | Fill-first | v0.1.1 | **This version** |
+| Codex capacity | Round-robin | Fill-first | v0.1.1 | Before | **This version** |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ten days, 1× (140M Pro, 75M ProLite a week) | 607.4M | 751.2M | 525.3M | 524.3M | **442.8M** |
+| Ten days, 1.5× | 317.0M | 476.1M | 320.0M | 320.0M | **182.2M** |
+| Ten days, 2× | 154.9M | 317.2M | 27.1M | 25.7M | **14.7M** |
+| 27 days, 1× | 1,067.9M | 1,323.5M | 1,097.7M | 1,096.7M | **941.8M** |
+| 27 days, 1.5× | 595.1M | 925.1M | – | 662.9M | **417.2M** |
+| 27 days, 2× | 258.0M | 631.1M | – | 132.3M | **124.4M** |
+
+Measured: at 1× this version pays 27% fewer credits than round-robin, 41% fewer than fill-first and 16% fewer than
+v0.1.1 over ten days, and 12%, 29% and 14% fewer over 27 days. Before had Codex 429s (2, 1 and 0 at 1×, 1.5× and 2×
+over ten days; 2, 2 and 1 over 27); this version has none, also with restarts every 6 or 24 hours (more frequent
+restarts can still cause one; see [restarts](#codex-restarts)). No Codex request goes unserved under
+any policy. At 1× and 1.5× every policy pays hundreds of millions of units in credits; we read that as demand the two
+weekly allowances can't hold under any routing, which the replay doesn't show directly. Quota per unit of Codex work
+is 0.04–0.30% higher than before and 0.07–0.39% above round-robin's and fill-first's.
+
+Why, from the 27-day replay's traces at 1×: before, Pro paying credits at 100% counted as exhausted just like a full
+ProLite. With both exhausted, the plugin picked ProLite for its larger projected headroom, which answered with a 429 at
+10-14 13:21. CPA v8.0.27 then keeps an account out until the reset it announced (10-20 05:52, after the recording
+ends) and never lets it back early. ProLite's window reset early, on 10-15 06:27, and the old rule used none of that
+window's 75M units while Pro paid credits; round-robin used all of it. Early resets are the norm here: in the
+replayed windows, taken from the Codex rollouts, Pro's weekly windows from 10-04 on lasted 0.4–3.9 days and ProLite's
+0.5–3.3, against the seven each announced.
+
+<a id="codex-restarts"></a>
+With plugin restarts (`SIM_RESTART_H`; seed 101, [openings](#terms) deferred as with tool search on), credits in
+millions of units and Codex 429s, before → this version:
+
+| Restart | Ten days, 1× | Ten days, 2× | 27 days, 1× | 27 days, 2× |
 | --- | ---: | ---: | ---: | ---: |
-| 1× (140M Pro, 75M ProLite a week) | 607.4M | 751.2M | 525.3M | **524.3M** |
-| 1.5× | 317.0M | 476.1M | 320.0M | **320.0M** |
-| 2× | 154.9M | 317.2M | 27.1M | **25.7M** |
+| None | 524.3 (2) → 442.8 (0) | 25.7 (0) → 14.7 (0) | 1,096.7 (2) → 941.8 (0) | 132.3 (1) → 124.4 (0) |
+| Every 24 hours | 524.6 (1) → 462.9 (0) | 40.3 (1) → 40.7 (0) | 1,101.2 (2) → 973.2 (0) | 140.0 (2) → 157.4 (0) |
+| Every 6 hours | 527.7 (2) → 476.1 (0) | 41.2 (1) → 52.8 (0) | 1,102.1 (2) → 957.4 (0) | 141.6 (2) → 159.4 (0) |
 
-At the estimated capacity (1×) this version spends 14% fewer credits than round-robin and 30% fewer than fill-first.
-At 1.5× round-robin spends 0.9% fewer than this version, and at 2× this version spends 83% and 92% fewer. Against
-v0.1.1 credits are unchanged at 1× and 1.5× (0.2% and 0.02% fewer) and 5.2% fewer at 2×. At 1× and 1.5× every
-policy pays hundreds of millions of units in credits; we read that as demand the two weekly allowances can't hold under
-any routing, which the replay doesn't show directly. Quota per unit of Codex work is within 0.12% for every policy.
+Measured: with 6- and 24-hourly restarts this version still has no Codex 429s and pays 10–13% fewer credits at 1×, but 1–28% more at
+2×. The traces put the 2× rise on Pro's early reset at 10-04 21:06, which ended its 10-02 window: restarts reveal it
+sooner (between 10-04 21:06 and 10-05 07:37, against 10-05 22:36 without restarts), least-used share then sends work
+to Pro, and the extra credits fall on 10-07 and 10-08 in the window that reset opened, before its own early reset at
+10-08 17:23 (ten days at 2× with 6-hourly restarts: 52.5M in that window against 14.2M without restarts). Over 27 days at 1× with 6-hourly
+restarts, ProLite's last window without credits ends at 74.93M of its 75M units (99.9%), near the edge: it is held
+from 98% on 10-16 at 05:53 until the recording ends about 2.75 days later. Until every account has answered after a
+restart the hold doesn't apply, so a held account keeps serving its live chats and new chats for those first seconds
+([start-up](how-it-works.md#codex-start-up)). Measured in the 27-day 1× traces with 3- and 6-hourly restarts: after
+the restart at 10-17 06:19:10, ProLite, held at 98.5–99.1% weekly usage, served requests at 06:19:10 and
+06:19:16 before Pro's first answer at 06:19:20; most restarts cost a held account one or two requests. Inferred: a
+hold longer than 2.75 days with 6-hourly restarts could use up the last 1% and reach a 429. Measured with more
+frequent restarts: every 3 hours, this version had 1 Codex 429 in one of four runs (27-day 1×), and hourly, 1–2 in
+three of four, against 1–2 in every one of those runs for the previous version. Traced cause in that 3-hourly run:
+ProLite crosses 98% on 10-16 at 05:40 and reaches 100.3% on 10-17 at 15:01, about 1.4 days and 12 requests later,
+most of them served just after a restart; its next request, at 17:55, gets the 429. With hourly restarts this version
+paid more credits than before on ten days at 1× (540.4M against 531.3M) and fewer on 27 days at 2× (175.4M against
+291.7M), so with hourly restarts the comparison is mixed. With restarts every 30 minutes it had no more Codex 429s
+than before (6 against 7 over the four runs) and paid no more credits. Probing every account not heard from for 3 hours, not only exhausted or held ones,
+raised credits in every cell without restarts (2×: 14.7M → 47.7M over ten days, 124.4M → 156.3M over 27) and was
+rejected. Claude results are unchanged in every cell.
+
+Limits:
+
+- The 2% reserve and the 3-hour probe interval were tuned on these two recordings. Measured without restarts: shorter
+  intervals cost more at 1×: 30 minutes 64.5M more over ten days and 137.7M more over 27 (507.3M and 1,079.5M, against
+  442.8M and 941.8M), and 1 hour 64.3M more over each, with no 429s; 6 hours paid within 5M of 3 hours in every cell.
+  A 1% reserve paid slightly fewer credits in all six cells without restarts (440.4M and 938.6M at 1×), also with no
+  429s, but with 6-hourly restarts it ran out: one and two Codex 429s at 1× and 111M and 66M more credits than 2%. So
+  2% is kept for restarts. A 3% reserve paid 2.5–5.3M more than 2% without restarts.
+- With early resets removed from the replayed windows, this version pays 0.1–0.7% more credits than before. Its
+  saving depends on windows resetting early.
+- The plugin reads `X-Codex-Credits-Has-Credits` from the response. That CPA passes it is inferred from CPA's source and
+  test fixtures, and the Codex client reads the same header, but it wasn't captured from live traffic. Without it every
+  account counts as not paying: each is held from 98% and none is preferred or probed for credits; least-used-share
+  placement, the start-up rule and probes of held accounts below 99% still act.
+- Plus and mixed Codex pools weren't tested: the recording has none. They keep projected placement, with the start-up
+  rule until an account shows a five-hour window.
 
 Codex reports no cache writes, so its write premium is unknown and the replay charges none. If writes cost 1.25 times
-uncached input, credits at the estimated capacity are 598M for this version against 675M for round-robin and 824M for
-fill-first, and at 2× Codex capacity 49M against 187M and 350M.
+uncached input, credits over ten days at the estimated capacity are 515M for this version against 675M for
+round-robin and 824M for fill-first, and at 2× Codex capacity 48M against 187M and 350M.
 
 ### Sensitivity
 
@@ -383,12 +451,13 @@ Setting each credential's `weight` to its plan size made no consistent differenc
 running: quota per unit of work moved by −0.34% to +0.13% across 0.9× to 2× as recorded and with tool search on,
 significant only at 0.9× (−0.34%) and 2× (−0.07%) as recorded. With a daily restart, when the plugin leans on the
 weight until usage headers have moved enough to measure each account, it spent 0.11–0.26% less at 1× and 1.25×
-(significant in three of four cells). Codex credits moved both ways:
+(significant in three of four cells). Codex credits moved by more than 0.1% only at 2×, up with the plugin kept
+running and down with a daily restart:
 
 | Codex credits with plan weights, vs without | 1× Codex capacity | 1.5× | 2× |
 | --- | ---: | ---: | ---: |
-| Plugin kept running | +0.6% | −45.5% | +56.6% |
-| Daily restart | +0.5% | −5.4% | +14.4% |
+| Plugin kept running | 0.0% | −0.01% | +31% (19.3M against 14.7M) |
+| Daily restart | −0.03% | −0.04% | −4.0% (39.1M against 40.7M) |
 
 ### Alternatives tested and rejected
 
@@ -403,7 +472,7 @@ spends more). The subagent rules are in [subagents and tool search](#subagents-a
 
 The same warm rule applied to Codex picks too, keyed like Claude's by requested model and agent kind, left Claude
 unchanged and spent 27.9% more Codex credits at 2× Codex capacity (32.8M against 25.7M), and 0.16% and 0.27% fewer
-at 1× and 1.5×. Codex stays out of the rule.
+at 1× and 1.5×, measured before the [weekly-only Codex rule](#codex). Codex stays out of the rule.
 
 **Other forms of the expiring-allowance rule.** A screen on the ten-day recording with tool search on (seeds 1–16; 0.9×,
 1× and 1.25×) tried fifteen forms: keeping the cold pick whenever its own urgency is at least 0.15, 0.25, 0.35, 0.5 or
@@ -480,7 +549,8 @@ replay sends) and usage records.
   2026-10-05 17:58) and Max 20x, with five-hour and weekly windows of 110M and 500M units for Max 20x and a quarter
   of that for Max 5x. Weekly phase and starting usage are unknown and drawn per seed. Codex: Pro and Business ProLite
   with the twelve weekly windows the logs show, early resets included, at 140M and 75M units a week, estimated from
-  stretches when one account served everything. An account with credits keeps serving past its limit.
+  stretches when one account served everything. An account with credits keeps serving past its limit, and each
+  response reports whether the account has credits in `X-Codex-Credits-Has-Credits`.
 - **Meter.** Claude uses Opus 5.5's [API price](https://platform.claude.com/docs/en/about-claude/pricing) ratios:
   cache read 0.05, five-minute write 1.25, one-hour write 2 and output 5 times uncached input. Other models'
   multipliers are assumed: Sonnet 0.6 and Haiku 0.2 times Opus, and Fable 1, though its list price is 2.5 times Opus

@@ -20,6 +20,7 @@ type placementQuota struct {
 	weeklyOnly         bool
 	noWeekly           bool    // Claude's response carries no weekly headers
 	tokens             float64 // input tokens the usage record reports
+	credits            string  // Codex's X-Codex-Credits-Has-Credits, if reported
 }
 
 type placementStep struct {
@@ -208,12 +209,12 @@ func TestPlacement(t *testing.T) {
 					quota: &placementQuota{used5: .1, usedW: .7, days: 6}},
 				{at: 2, sid: "fresh", model: "claude-opus-5-5", alias: "smart", candidates: "ab", want: "a"},
 			}},
-		// Codex must skip the Claude-only warm step and rank weekly-only accounts by expiry urgency, not spare room. Equal
-		// weights and weekly use; a's reset is 2.2 days out and b's 2, so urgencies are .284 for a and .3125 for b and b wins
-		// on urgency. The lead, .028, is under keepCold's 0.3, so a Codex pick that ran the warm step would move to a. It is
-		// also under 0.05, so the case still catches that warm step if keepCold is lowered to 0.05.
+		// Codex must skip the Claude-only warm step and place on weekly-only accounts by the share of the week used. Equal
+		// weights; b has used .48 and a .5, so b wins. a's reset is 2.2 days out and b's 2, so expiry urgencies are .284 for
+		// a and .325 for b. The lead, .041, is under keepCold's 0.3, so a Codex pick that ran the warm step would move to a.
+		// It is also under 0.05, so the case still catches that warm step if keepCold is lowered to 0.05.
 		{"Codex ignores cached prefixes", "codex", []float64{20, 20},
-			[]placementQuota{{usedW: .5, days: 2.2, weeklyOnly: true}, {usedW: .5, days: 2, weeklyOnly: true}},
+			[]placementQuota{{usedW: .5, days: 2.2, weeklyOnly: true}, {usedW: .48, days: 2, weeklyOnly: true}},
 			[]placementStep{
 				{at: 1, sid: "other", model: "m", auth: "a", quota: &placementQuota{usedW: .5, days: 2.2, weeklyOnly: true}},
 				{at: 2, sid: "fresh", model: "m", candidates: "ab", want: "b"},
@@ -226,6 +227,242 @@ func TestPlacement(t *testing.T) {
 				{at: 2, sid: "chat", candidates: "ab", want: "b"},
 				{at: 3, sid: "fresh", candidates: "ab", want: "b"},
 			}},
+		// a has no credits and is within the 2% reserve, so it is held; b pays credits past its limit, which beats a 429.
+		{"Codex holds an account without credits short of its limit", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}, {usedW: 1, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{{at: 1, sid: "fresh", candidates: "ab", want: "b"}}},
+		// Three hours after a was last heard from, one new chat probes it; the next new chat doesn't, nor does a chat with
+		// history.
+		{"a new chat probes a held Codex account every three hours", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}, {usedW: .5, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{
+				{at: 1, sid: "fresh", candidates: "ab", want: "b"},
+				{at: 2, sid: "fresh", auth: "b", quota: &placementQuota{usedW: .5, days: 3, weeklyOnly: true, credits: "True"}},
+				{at: 3 * 3600, sid: "fresh", candidates: "ab", want: "b"},
+				{at: 3*3600 + 1, sid: "fresh2", candidates: "ab", want: "a"},
+				{at: 3*3600 + 2, sid: "fresh3", candidates: "ab", want: "b"},
+			}},
+		// a has used half its week and b .4, so b wins, although a's allowance expires sooner and is larger.
+		{"Codex places weekly-only work on the smallest share of the week used, not by expiry or absolute room", "codex", []float64{24, 10},
+			[]placementQuota{{usedW: .5, days: 1, weeklyOnly: true}, {usedW: .4, days: 6, weeklyOnly: true}},
+			[]placementStep{{sid: "fresh", candidates: "ab", want: "b"}}},
+		{"Codex breaks a tie in the share used by the most allowance left", "codex", []float64{10, 24},
+			[]placementQuota{{usedW: .3, days: 3, weeklyOnly: true}, {usedW: .3, days: 3, weeklyOnly: true}},
+			[]placementStep{{sid: "fresh", candidates: "ab", want: "b"}}},
+		// a's weekly allowance expires in half a day, so it wins on expiry urgency though it has used more of its week.
+		{"Codex with five-hour windows keeps placing by expiry urgency", "codex", []float64{20, 20},
+			[]placementQuota{{used5: .6, usedW: .75, days: .5}, {used5: .1, usedW: .7, days: 6}},
+			[]placementStep{{sid: "fresh", candidates: "ab", want: "a"}}},
+		{"a Codex pool with any five-hour window keeps placing by expiry urgency", "codex", []float64{20, 20},
+			[]placementQuota{{used5: .6, usedW: .75, days: .5}, {usedW: .7, days: 6, weeklyOnly: true}},
+			[]placementStep{{sid: "fresh", candidates: "ab", want: "a"}}},
+		// a sits just under its reserve; at .985 the case above holds it.
+		{"Codex holds an account without credits only from its reserve on", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .975, days: 3, weeklyOnly: true, credits: "False"}, {usedW: 1, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{{at: 1, sid: "fresh", candidates: "ab", want: "a"}}},
+		{"Codex stops holding an account without credits once its weekly window expires", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .99, days: -1, weeklyOnly: true, credits: "False"}, {usedW: .1, days: 6, weeklyOnly: true, credits: "False"}},
+			[]placementStep{{at: 1, sid: "fresh", candidates: "ab", want: "a"}}},
+		// Once every account is held, a live chat stays where it is instead of moving to whichever has used less.
+		{"a Codex chat stays on a held account when every account is held", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .99, days: 3, weeklyOnly: true, credits: "False"}, {usedW: .985, days: 3, weeklyOnly: true, credits: "False"}},
+			[]placementStep{
+				{sid: "chat", candidates: "ab", want: "b"},
+				{at: 1, sid: "chat", auth: "b", quota: &placementQuota{usedW: .995, days: 3, weeklyOnly: true, credits: "False"}},
+				{at: 2, sid: "chat", candidates: "ab", want: "b"},
+			}},
+		{"a Codex chat leaves a held account for one with room", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .4, days: 3, weeklyOnly: true, credits: "False"}, {usedW: .5, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{
+				{sid: "chat", candidates: "ab", want: "a"},
+				{at: 1, sid: "chat", auth: "a", quota: &placementQuota{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}},
+				{at: 2, sid: "chat", candidates: "ab", want: "b"},
+			}},
+		{"a Claude chat stays on an account in its last 2% of the week", "claude", []float64{20, 20},
+			[]placementQuota{{used5: .1, usedW: .5, days: 3}, {used5: .1, usedW: .5, days: 3}},
+			[]placementStep{
+				{sid: "chat", candidates: "a", want: "a"},
+				{at: 1, sid: "chat", auth: "a", quota: &placementQuota{used5: .1, usedW: .985, days: 3}},
+				{at: 2, sid: "chat", candidates: "ab", want: "a"},
+			}},
+		// b would answer with a 429 and a has room; c pays credits, so only c is probed, and only by a main chat that is
+		// new, three hours after c was last heard from.
+		{"a new chat probes only an exhausted Codex account that answers without a 429", "codex", []float64{20, 20, 20},
+			[]placementQuota{{usedW: .5, days: 3, weeklyOnly: true, credits: "True"}, {usedW: 1, days: 3, weeklyOnly: true, credits: "False"},
+				{usedW: 1, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{
+				{at: 3*3600 - 60, sid: "early", candidates: "abc", want: "a"},
+				{at: 3 * 3600, sid: "x:agent:s", parent: "x", candidates: "abc", want: "a"},
+				{at: 3*3600 + 1, sid: "fresh", candidates: "abc", want: "c"},
+			}},
+		// a and b are both held and due for a probe: one new chat probes a, the next b, the next goes to c.
+		{"new chats probe two held Codex accounts one at a time", "codex", []float64{20, 20, 20},
+			[]placementQuota{{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}, {usedW: .985, days: 3, weeklyOnly: true, credits: "False"},
+				{usedW: .5, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{
+				{at: 3*3600 + 1, sid: "fresh", candidates: "abc", want: "a"},
+				{at: 3*3600 + 2, sid: "fresh2", candidates: "abc", want: "b"},
+				{at: 3*3600 + 3, sid: "fresh3", candidates: "abc", want: "c"},
+			}},
+		// a has used half its reserve; the other half is left for the request a plugin restart sends it.
+		{"a held Codex account is no longer probed once half its reserve is used", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .99, days: 3, weeklyOnly: true, credits: "False"}, {usedW: .5, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{{at: 3*3600 + 1, sid: "fresh", candidates: "ab", want: "b"}}},
+		// b is exhausted and hasn't said whether it pays credits, so it may answer with a 429.
+		{"a new chat does not probe an exhausted Codex account whose credits are unknown", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .5, days: 3, weeklyOnly: true, credits: "True"}, {usedW: 1, days: 3, weeklyOnly: true}},
+			[]placementStep{{at: 3*3600 + 1, sid: "fresh", candidates: "ab", want: "a"}}},
+		// Codex reports whole percents, so 98% is exactly the reserve.
+		{"Codex holds an account without credits at exactly its reserve", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .98, days: 3, weeklyOnly: true, credits: "False"}, {usedW: 1, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{{at: 1, sid: "fresh", candidates: "ab", want: "b"}}},
+		// The websocket path sends the header in lowercase; a response without it leaves what was last reported. Both are
+		// exhausted, and only b reported credits, so only b answers without a 429.
+		{"Codex reads the credits header in lowercase and keeps it through a response without it", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: 1, days: 3, weeklyOnly: true}, {usedW: 1, days: 3, weeklyOnly: true, credits: "true"}},
+			[]placementStep{
+				{at: 1, sid: "other", auth: "b", quota: &placementQuota{usedW: 1, days: 3, weeklyOnly: true}},
+				{at: 2, sid: "fresh", candidates: "ab", want: "b"},
+			}},
+		// a hasn't said whether it pays credits, so it is held like one without; b pays past its limit.
+		{"Codex holds an account whose credits are unknown", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .985, days: 3, weeklyOnly: true}, {usedW: 1, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{{at: 1, sid: "fresh", candidates: "ab", want: "b"}}},
+		// Both are exhausted; only b is known to pay credits rather than answer with a 429.
+		{"an exhausted Codex account known to pay credits beats one whose credits are unknown", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: 1, days: 3, weeklyOnly: true}, {usedW: 1, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{{at: 1, sid: "fresh", candidates: "ab", want: "b"}}},
+		// As after a restart, b hasn't answered yet and reads as unused: it takes one chat, and neither a second chat nor
+		// that chat's subagent joins it before it answers; once it has, the pool places by the share used again.
+		{"a Codex account not yet heard from takes one request until it answers", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .5, days: 3, weeklyOnly: true, credits: "False"}},
+			[]placementStep{
+				{at: 1, sid: "x", candidates: "ab", want: "b"},
+				{at: 2, sid: "x:agent:s", parent: "x", candidates: "ab", want: "a"},
+				{at: 3, sid: "y", candidates: "ab", want: "a"},
+				{at: 4, sid: "x", auth: "b", quota: &placementQuota{usedW: .3, days: 3, weeklyOnly: true, credits: "False"}},
+				{at: 5, sid: "z", candidates: "ab", want: "b"},
+			}},
+		// a has used its week without credits, so it would answer with a 429; b, not yet heard from, takes the second chat too.
+		{"a Codex account not yet heard from is not skipped for one that would answer with a 429", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: 1, days: 3, weeklyOnly: true, credits: "False"}},
+			[]placementStep{{at: 1, sid: "x", candidates: "ab", want: "b"}, {at: 2, sid: "y", candidates: "ab", want: "b"}}},
+		// a has used its week but pays credits, so the second chat goes to a while b hasn't answered.
+		{"a Codex account not yet heard from is skipped for one that pays credits past its limit", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: 1, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{{at: 1, sid: "x", candidates: "ab", want: "b"}, {at: 2, sid: "y", candidates: "ab", want: "a"}}},
+		// b's first request never answered; three hours after it was picked, it takes another request.
+		{"a Codex account not yet heard from takes another request three hours after the last", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .5, days: 3, weeklyOnly: true, credits: "False"}},
+			[]placementStep{
+				{at: 1, sid: "x", candidates: "ab", want: "b"},
+				{at: 2, sid: "y", candidates: "ab", want: "a"},
+				{at: 3*3600 + 1, sid: "z", candidates: "ab", want: "b"},
+			}},
+		// b has not answered, so x's chat bound to it is skipped too; its next request goes to a, which has answered.
+		{"a chat bound to a Codex account not yet heard from is moved to another", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .5, days: 3, weeklyOnly: true, credits: "False"}},
+			[]placementStep{
+				{at: 1, sid: "x", candidates: "ab", want: "b"},
+				{at: 2, sid: "x", candidates: "ab", want: "a"},
+			}},
+		// a has used its week and hasn't said whether it pays credits, so it doesn't answer; b, not yet heard from, takes the chat.
+		{"a new Codex chat does not take an exhausted account of unknown credits over one not yet heard from", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: 1, days: 3, weeklyOnly: true}},
+			[]placementStep{
+				{at: 1, sid: "x", candidates: "ab", want: "b"},
+				{at: 2, sid: "y", candidates: "ab", want: "b"},
+			}},
+		// a is held but answers without a 429, so a second chat goes to it while b, not yet heard from, waits.
+		{"a Codex account not yet heard from is skipped for a held one", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}},
+			[]placementStep{{at: 1, sid: "x", candidates: "ab", want: "b"}, {at: 2, sid: "y", candidates: "ab", want: "a"}}},
+		// c was picked and hasn't answered; a has used its week without credits and would answer with a 429, so with c
+		// waiting the new chat goes to b, which pays credits, though a is listed first.
+		{"a Codex account not yet heard from is skipped only for those that answer", "codex", []float64{20, 20, 20},
+			[]placementQuota{{usedW: 1, days: 3, weeklyOnly: true, credits: "False"}, {usedW: 1, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{
+				{at: 1, sid: "x", candidates: "c", want: "c"},
+				{at: 2, sid: "fresh", candidates: "abc", want: "b"},
+			}},
+		// a (Plus) is cooling down and left out of the candidates, but the pool still has a five-hour window: a new chat
+		// goes by expiry urgency to b, whose larger allowance expires in a day, not to c, which has used less of its week.
+		{"a Codex pool keeps its five-hour rules while its five-hour account cools down: placing", "codex", []float64{20, 24, 10},
+			[]placementQuota{{used5: .1, usedW: .5, days: 3}, {usedW: .5, days: 1, weeklyOnly: true}, {usedW: .4, days: 6, weeklyOnly: true}},
+			[]placementStep{{at: 1, sid: "fresh", candidates: "bc", want: "b"}}},
+		// As above, so b's chat stays on it in its last 2% without credits.
+		{"a Codex pool keeps its five-hour rules while its five-hour account cools down: holding", "codex", []float64{20, 20, 20},
+			[]placementQuota{{used5: .1, usedW: .5, days: 3}, {usedW: .5, days: 3, weeklyOnly: true}, {usedW: .1, days: 3, weeklyOnly: true}},
+			[]placementStep{
+				{sid: "chat", candidates: "b", want: "b"},
+				{at: 1, sid: "chat", auth: "b", quota: &placementQuota{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}},
+				{at: 2, sid: "chat", candidates: "bc", want: "b"},
+			}},
+		// As after a restart, a hasn't answered yet; it is the only account, so it takes every request.
+		{"a one-account Codex pool keeps placing before its account answers", "codex", []float64{20},
+			nil,
+			[]placementStep{{at: 1, sid: "x", candidates: "a", want: "a"}, {at: 2, sid: "y", candidates: "a", want: "a"}}},
+		// c was picked and hasn't answered, so the pool isn't yet known to be weekly-only: a new chat goes by expiry
+		// urgency to a, whose larger allowance expires in a day, not to b, which has used less of its week.
+		{"a Codex pool places by the share used only once every account has answered", "codex", []float64{24, 10, 20},
+			[]placementQuota{{usedW: .5, days: 1, weeklyOnly: true}, {usedW: .4, days: 6, weeklyOnly: true}},
+			[]placementStep{
+				{at: 1, sid: "x", candidates: "c", want: "c"},
+				{at: 2, sid: "fresh", candidates: "abc", want: "a"},
+			}},
+		// a is held and due for a probe, but c was picked two seconds in and hasn't answered, so no new chat probes a.
+		{"a Codex pool probes only once every account has answered", "codex", []float64{20, 20, 20},
+			[]placementQuota{{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}, {usedW: .5, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{
+				{at: 2, sid: "x", candidates: "c", want: "c"},
+				{at: 3*3600 + 1, sid: "fresh", candidates: "abc", want: "b"},
+			}},
+		// a is held, but it answered an hour in, under three hours before the new chat.
+		{"a new chat does not probe a held Codex account heard from within three hours", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}, {usedW: .5, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{
+				{at: 3600, sid: "other", auth: "a", quota: &placementQuota{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}},
+				{at: 3*3600 + 1, sid: "fresh", candidates: "ab", want: "b"},
+			}},
+		// a's chat is held once a answers at its reserve; b pays credits past its limit, so the chat moves to b.
+		{"a live Codex chat on a held account fails over to one that pays credits", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .5, days: 3, weeklyOnly: true, credits: "False"}, {usedW: 1, days: 3, weeklyOnly: true, credits: "True"}},
+			[]placementStep{
+				{sid: "chat", candidates: "ab", want: "a"},
+				{at: 1, sid: "chat", auth: "a", quota: &placementQuota{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}},
+				{at: 2, sid: "chat", candidates: "ab", want: "b"},
+			}},
+		// Until b (perhaps a Plus account) answers, a's chat stays on it in its reserve, as in a pool with five-hour windows.
+		{"a Codex pool holds no account until every account has answered", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .5, days: 3, weeklyOnly: true, credits: "False"}},
+			[]placementStep{
+				{sid: "chat", candidates: "a", want: "a"},
+				{at: 1, sid: "chat", auth: "a", quota: &placementQuota{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}},
+				{at: 2, sid: "chat", candidates: "ab", want: "a"},
+			}},
+		// In a pool with any five-hour window nothing is held or probed: a (Plus, its five-hour window full) would answer
+		// with a 429, b (weekly-only) is placed on like any account, and a new chat goes to c, which has the most room.
+		{"a Codex pool with five-hour windows never probes", "codex", []float64{20, 20, 20},
+			[]placementQuota{{used5: 1, usedW: .985, days: 3, credits: "False"}, {usedW: .985, days: 3, weeklyOnly: true, credits: "False"},
+				{used5: .1, usedW: .5, days: 3, credits: "True"}},
+			[]placementStep{{at: 3*3600 + 1, sid: "fresh", candidates: "abc", want: "c"}}},
+		// Plus a and weekly-only b, each in its last 2% without credits, keep their live chats.
+		{"a Codex pool with five-hour windows holds no account", "codex", []float64{20, 20, 20},
+			[]placementQuota{{used5: .1, usedW: .5, days: 3}, {usedW: .5, days: 3, weeklyOnly: true}, {used5: .1, usedW: .1, days: 3}},
+			[]placementStep{
+				{sid: "chat-a", candidates: "a", want: "a"},
+				{sid: "chat-b", candidates: "b", want: "b"},
+				{at: 1, sid: "chat-a", auth: "a", quota: &placementQuota{used5: .1, usedW: .985, days: 3, credits: "False"}},
+				{at: 1, sid: "chat-b", auth: "b", quota: &placementQuota{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}},
+				{at: 2, sid: "chat-a", candidates: "abc", want: "a"},
+				{at: 2, sid: "chat-b", candidates: "abc", want: "b"},
+			}},
+		// c's five-hour window is full, so place drops it even though it pays credits; a (Plus) leads b (weekly-only)
+		// on headroom plus urgency.
+		{"a Codex pool with five-hour windows places on accounts in their last 2% before exhausted ones", "codex", []float64{20, 20, 20},
+			[]placementQuota{{used5: .1, usedW: .985, days: 3, credits: "False"}, {usedW: .985, days: 3, weeklyOnly: true, credits: "False"},
+				{used5: 1, usedW: .5, days: 3, credits: "True"}},
+			[]placementStep{{at: 1, sid: "fresh", candidates: "abc", want: "a"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -344,6 +581,9 @@ func placementObserve(t *testing.T, p *router, provider string, s placementStep)
 		h.Set("X-Codex-Secondary-Used-Percent", f(100*q.usedW))
 		h.Set("X-Codex-Secondary-Window-Minutes", "10080")
 		h.Set("X-Codex-Secondary-Reset-At", f(placementNow+86400*q.days))
+		if q.credits != "" {
+			h.Set("X-Codex-Credits-Has-Credits", q.credits)
+		}
 	}
 	call[struct{}](t, p, pluginabi.MethodUsageHandle, pluginapi.UsageRecord{Provider: provider, Model: cmp.Or(s.upstream, s.model),
 		Alias: cmp.Or(s.alias, s.model), AuthID: s.auth, Failed: s.failed, SessionID: s.sid, ParentSessionID: s.parent, ResponseHeaders: h,

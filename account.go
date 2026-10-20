@@ -38,6 +38,8 @@ type account struct {
 	k5Hint, kWHint float64 // utilization per unit, from the weight
 	u5, r5, uW, rW float64 // last observed utilization and reset (-1 = unknown)
 	tObs           float64
+	credits        int     // Codex: 1 if it reports credits to pay with past its limits, -1 if it reports none, 0 until reported
+	probeT         float64 // Codex: when a new chat last probed it, or it was picked before it was first heard from
 
 	acc5, accWShort, accWLong, accT float64 // exponentially decayed utilization deltas (burn rates)
 	sumDu5, sumW5, sumDuW, sumWW    float64 // online calibration: utilization deltas vs assumed units
@@ -84,6 +86,20 @@ func (a *account) weekly(t float64) (float64, float64) {
 
 func (a *account) exhausted(t float64) bool {
 	return a.has5h && a.r5 > t && a.u5 >= 1 || a.rW > t && a.uW >= 1
+}
+
+// held reports a Codex account not known to pay with credits that has reached its weekly reserve. Past its limit it
+// would answer with a 429, and CPA would then keep it out until the reset it announced, past any early reset of its
+// window.
+func (a *account) held(t float64) bool {
+	return a.credits <= 0 && a.rW > t && a.uW >= 1-creditReserve
+}
+
+// probeable reports an exhausted or held account that a request still reaches without a 429: one paying with
+// credits, or a held one with at least half its reserve left. The last 1% covers the requests a held account
+// still serves after each plugin restart, before every account has answered.
+func (a *account) probeable(t float64) bool {
+	return a.exhausted(t) && a.credits > 0 || a.held(t) && a.uW < 1-creditReserve/2
 }
 
 func (a *account) decay(t float64) {

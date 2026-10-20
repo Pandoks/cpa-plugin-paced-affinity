@@ -10,19 +10,24 @@ A *binding* ties a chat to an account. It is live while it has been used within 
 a chat identity, the plugin takes these steps in order:
 
 1. **Use a live binding.** A request whose binding is live goes to the bound account, unless that account is
-   rate-limited or reports its limit reached. A main chat has its own binding. A chat's subagents, its *family*,
-   share one binding separate from the chat's, or each has its own when Claude Code's tool search is on (see
-   [subagents and forks](#subagents-and-forks)). A *fork*, a new chat started from a copy of another chat's history,
-   shares its parent's binding. A better score elsewhere doesn't move a chat: on another account its whole context is
-   written again, and a one-hour cache write costs about 40 times a cached read under the
+   rate-limited or reports its limit reached, or, in a weekly-only Codex pool, is held while another account can take
+   the work ([weekly-only Codex accounts](#weekly-only-codex-accounts)). A main chat has its own binding. A chat's
+   subagents, its *family*, share one binding separate from the chat's, or each has its own when Claude Code's tool
+   search is on (see [subagents and forks](#subagents-and-forks)). A *fork*, a new chat started from a copy of another
+   chat's history, shares its parent's binding. A better score elsewhere doesn't move a chat: on another account its
+   whole context is written again, and a one-hour cache write costs about 40 times a cached read under the
    [benchmark's meter](benchmarks.md#what-the-replay-does).
 2. **Drop accounts that can't take the work.** An account that reports 100% usage gets no new work while another has
    room, and placement only uses accounts within the [margins](#margins), so new work doesn't push an account into
-   its limit.
+   its limit. The exception is a Codex pool without five-hour windows once every account has answered: it skips the
+   margins, and instead an account that reports no credits is held from 98% weekly usage
+   ([weekly-only Codex accounts](#weekly-only-codex-accounts)).
 3. **Pick.** A new Claude main chat goes to the account furthest behind its weekly spending target
    ([weekly pacing](#weekly-pacing-for-new-claude-main-chats)), so each account's allowance is spent before its week
-   resets. Everything else uses [projected placement](#projected-placement): the most projected headroom, plus a
-   bonus for weekly allowance that would otherwise expire unused.
+   resets. Codex work in a pool without five-hour windows, once every account has answered, goes to the account that
+   has used the least of its week ([weekly-only Codex accounts](#weekly-only-codex-accounts)). Everything else uses
+   [projected placement](#projected-placement): the most projected headroom, plus a bonus for weekly allowance that
+   would otherwise expire unused.
 4. **Claude only: prefer a warm account.** If step 3's pick hasn't recently served the same model and kind of agent,
    the plugin applies step 3's rule to the accounts that have and that pass the margins. The chat then reads its
    shared prompt prefix from cache instead of writing it again (see
@@ -32,7 +37,9 @@ a chat identity, the plugin takes these steps in order:
 
 ## Margins
 
-Placement only uses an account that passes these margins. *Projected* usage is what the account would reach if its
+Placement only uses an account that passes these margins, except in a weekly-only Codex pool, where the 98% hold
+plays that role and work goes to the least-used share among accounts neither exhausted nor held
+([weekly-only Codex accounts](#weekly-only-codex-accounts)). *Projected* usage is what the account would reach if its
 recent burn rate, plus the new work, continued: for the five-hour window, at its reset; for the weekly window, five
 hours ahead, or at the reset if that is sooner.
 
@@ -40,7 +47,7 @@ hours ahead, or at the reset if that is sooner.
 | --- | --- | --- |
 | Five-hour, observed | The last reported five-hour usage is at most 95%; an expired window counts as 0% | Weekly pacing of a new Claude main chat |
 | Five-hour, projected | Projected five-hour usage is at most 95% | Projected placement and the warm-cache rule |
-| Weekly, projected | Projected weekly usage is at most 97%, or some weekly allowance is projected to expire unused anyway | All placements |
+| Weekly, projected | Projected weekly usage is at most 97%, or some weekly allowance is projected to expire unused anyway | Weekly pacing, projected placement and the warm-cache rule |
 
 If no account passes, projected placement picks the account with the most projected headroom.
 
@@ -104,9 +111,9 @@ has more unused allowance but is early in its week.
 
 ## Projected placement
 
-Claude's resumed chats (including their retries after a 429), subagents and forks use this rule, and so does all Codex
-work. For each account that passes the projected margins, estimate how much allowance would remain at its next reset
-if its recent burn rate continued:
+Claude's resumed chats (including their retries after a 429), subagents and forks use this rule, and so does Codex work
+in pools with a five-hour window or with an account not yet heard from. For each account that passes the projected
+margins, estimate how much allowance would remain at its next reset if its recent burn rate continued:
 
 ```text
 projected room = remaining allowance − recent burn rate × time until reset
@@ -156,19 +163,50 @@ projected total usage by the weekly reset as a percentage of the account's allow
 
 ## Weekly-only Codex accounts
 
-Codex Pro's seven-day window starts with the first request after the previous window expires. For weekly-only pools,
-the scheduler uses weekly urgency without a five-hour room term. An expired window is reopened first, because its next
-week doesn't start until a request arrives: until then its allowance sits idle. If every active account is on pace to
-use its whole allowance, the account with the most weekly room wins instead. Codex plans with five-hour limits use the
-five-hour and weekly logic above.
+When none of the Codex accounts the plugin has seen, including those cooling down that aren't candidates for this
+request, has shown a five-hour window (Pro and Business ProLite), and every candidate has answered since the plugin
+started, these rules replace projected placement for all Codex work. Only a response shows a five-hour window, so
+until every candidate has answered, the pool uses projected placement with the [start-up](#codex-start-up) rule, and
+no account is held. Codex pools with a five-hour plan, such as Plus, and Claude are unchanged.
 
-| Account | Weekly used | Reset in | Weekly pace | Projected leftover |
-| --- | ---: | --- | ---: | ---: |
-| D | 40% | 5 days | 100% | 0 units |
-| **E** | **30%** | **1 day** | **60%** | **4 units** |
+- **Least-used share first.** New work goes to the account that has used the smallest share of its weekly allowance;
+  an expired window counts as unused, so it is reopened first. Ties go to the most allowance left. Codex windows often
+  reset days early, discarding what's left; keeping usage even is meant to waste the least of it.
+- **Hold an account without credits at 98%.** The plugin reads `X-Codex-Credits-Has-Credits` from each response. An
+  account that reports `false`, or hasn't reported the header, gets no new work from 98% weekly usage, and its live
+  chats move while another account is usable. Past 100% it would answer with a 429, and CPA v8.0.27 then keeps it out
+  until the reset it announced, even if its window resets sooner.
+- **When every account is held or exhausted,** work goes to an account that reports credits rather than one that
+  would answer with a 429 or eat its reserve. If every account is held, live chats stay where they are.
+- **Probe for early resets.** Only a response shows an early reset. So one new main chat goes to an exhausted or held
+  account that can still answer without a 429 once no request has reached it for 3 hours, at most once every 3 hours
+  per account: one that reports credits, or a held one below 99%. The last 1% is for the requests a held account
+  still serves after each plugin restart ([start-up](#codex-start-up)). If its window has reset, the account takes
+  work again; if not, the chat moves on at its next request.
 
-**E gets the work.** Its four unused units are due to expire in a day; D's remaining allowance is already on pace to
-be consumed.
+<a id="codex-start-up"></a>
+**Start-up.** After a restart the plugin has heard from no account, and one not yet heard from reads as unused, so
+projected placement would send it every new chat. In any Codex pool, until some account shows a five-hour window, an
+account not yet heard from takes one pick and is then skipped until it answers or 3 hours pass; accounts that would
+answer with a 429 (exhausted and not reporting credits) are skipped too. If that would leave no account, every
+candidate stays eligible, so while every account is still waiting for its first answer, one can take more than one
+pick.
+
+Until every account has answered after a restart, the hold doesn't apply: a held account keeps serving its live chats
+and takes new chats for those first seconds, while another account's first request is in flight. That is what the
+last 1% of the reserve is for, and with restarts every few hours it can run out
+([benchmarks](benchmarks.md#codex-restarts)). Measured in the 27-day replay at 1× with 3- or 6-hourly restarts: after
+the restart at 10-17 06:19:10, ProLite, held, served requests at 06:19:10 and 06:19:16 before Pro's first answer at
+06:19:20; most restarts cost a held account one or two requests.
+
+Measured in the replay of the author's Pro and ProLite traffic with the plugin kept running, this paid 6–43% fewer
+Codex credits than the previous rule at 1× to 2× the estimated capacity, with no Codex 429s. With a plugin restart
+every 24 or 6 hours it also had no Codex 429s and paid 10–13% fewer credits at 1×, but 1–28% more at 2×
+([benchmarks](benchmarks.md#codex)). The 98% reserve and 3-hour interval were tuned on that same traffic, and the gain
+depends on windows resetting early. That CPA passes the credits header is inferred from its source and the Codex
+client, not seen in live traffic. Without the header every account counts as not paying: it is held from 98% and
+never preferred or probed for credits; least-used-share placement, the start-up rule and probes of held accounts
+below 99% still act.
 
 ## Placing a chat where its prompt is cached
 
@@ -245,7 +283,11 @@ at 0.7× to 0.9× the assumed allowances, and no robust gain at 1× ([benchmarks
 With CPA's default `model-level-cooling: false`, after a 429 CPA itself benches the account until its reset, so the plugin never sees it. An account can also report
 100% usage on a successful response. A Codex account with credits keeps answering past its limit and charges the
 credits. The plugin treats any account that reports 100% as exhausted until its window resets: it gets no new work and
-warm chats leave it, while another candidate has room.
+warm chats leave it, while another candidate has room. In a weekly-only Codex pool, an account that reports no
+credits is held from 98% instead, so it normally doesn't reach the 429 ([above](#weekly-only-codex-accounts)).
+After each plugin restart a held account still serves requests until every account has answered, usually one or two
+([start-up](#codex-start-up)), so restarts every few hours can use up the reserve and reach one
+([benchmarks](benchmarks.md#codex-restarts)).
 
 ## Signals it uses
 
@@ -253,6 +295,7 @@ warm chats leave it, while another candidate has room.
 | --- | --- |
 | `anthropic-ratelimit-unified-5h` / `7d` utilization and reset headers | Observe Claude window usage and reset times |
 | `x-codex-primary` / `secondary` used-percent, window-minutes, reset-at headers | Identify Codex windows and observe usage |
+| `x-codex-credits-has-credits` header | Tell which weekly-only Codex accounts pay with credits: those aren't held short of their limit, and are preferred and probed past it |
 | Token usage in responses; the model the client requested | Estimate burn and capacity; remember which accounts hold each model's prompt prefix |
 | Claude Code and Codex session and agent IDs | Track bindings: a chat's, its subagents', and a fork's on its parent's |
 | `Anthropic-Beta` request header (`advanced-tool-use-`) | Tell whether Claude Code's tool search is on, which decides how Claude subagents are bound |

@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"slices"
+	"strconv"
 	"sync"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -17,6 +18,8 @@ const (
 	gateLo, gateHi float64 = 0.4, 0.7    // weekly pressure that switches the weekly-expiry term on
 	keepCold       float64 = 0.3         // expiry urgency by which a cold pick must lead a warm one to keep the work
 	sessionTTL     float64 = 7 * 24 * 60 // forget idle sessions
+	creditReserve  float64 = 0.02        // weekly allowance a Codex account without credits keeps for probes
+	probeEvery     float64 = 180         // minutes between probes of a held, exhausted or unheard-from Codex account
 )
 
 type session struct {
@@ -67,13 +70,27 @@ func (r *router) pick(provider, model, sid, parent string, own bool, cands []plu
 	for i, c := range cands {
 		cs[i] = r.account(c.ID, provider, credentialWeight(c.Attributes))
 	}
+	// Codex pools without five-hour windows (Pro, ProLite) hold accounts without credits short of their limit. Only a
+	// response shows a five-hour window, so a pool counts as one once every candidate has answered and no account in it,
+	// candidate or cooling down, has shown one. Until then an account not yet heard from (as after a restart) reads as
+	// unused, so it takes one request until it answers, unless every other account would answer with a 429; while it
+	// waits, those that would are skipped too.
+	weekly := provider == "codex" && !slices.ContainsFunc(r.pools[provider], func(a *account) bool { return a.has5h })
+	weeklyOnly := weekly && !slices.ContainsFunc(cs, func(a *account) bool { return a.tObs < 0 })
+	if weekly {
+		waiting := func(a *account) bool { return a.tObs < 0 && t-a.probeT < probeEvery }
+		answers := func(a *account) bool { return !a.exhausted(t) || a.credits > 0 }
+		if rest := slices.DeleteFunc(slices.Clone(cs), func(a *account) bool { return waiting(a) || !answers(a) }); len(rest) > 0 {
+			cs = rest
+		}
+	}
 	kind, key := sessionKey(sid, parent, own)
 	reason := "placed"
 	if b := r.bindings[key]; b != nil && t-b.lastT <= affinityTTL {
-		if slices.Contains(cs, b.acct) && !b.acct.exhausted(t) {
+		if slices.Contains(cs, b.acct) && !b.acct.exhausted(t) && (!weeklyOnly || slices.Contains(usable(cs, t), b.acct)) {
 			return b.acct, "affinity"
 		}
-		reason = "failover" // cooling down after a 429, or reported exhausted
+		reason = "failover" // cooling down after a 429, reported exhausted, or held while another account is usable
 	}
 	choose, burn := r.place, 0.0
 	if s := r.sessions[sid]; s != nil {
@@ -84,7 +101,23 @@ func (r *router) pick(provider, model, sid, parent string, own bool, cands []plu
 			choose = r.placeObservedWeekly // a new main chat
 		}
 	}
+	if weeklyOnly {
+		choose = r.placeWeekly
+	}
 	a := choose(cs, t, burn)
+	// Codex windows often reset early, which only a request shows: now and then a new chat probes an account kept from
+	// new work, if it can take the request without a 429.
+	if weeklyOnly && kind == kindMain && r.sessions[sid] == nil {
+		for _, h := range cs {
+			if h.probeable(t) && t-h.tObs >= probeEvery && t-h.probeT >= probeEvery {
+				a, h.probeT = h, t
+				break
+			}
+		}
+	}
+	if weekly && a.tObs < 0 {
+		a.probeT = t
+	}
 	// A Claude chat starts by sending its model's tools and system prompt, which other chats sent too; on an
 	// account that served them within the cache TTL it reads them instead of writing them again, unless the pick's
 	// expiry urgency leads the warm choice's by keepCold.
@@ -173,6 +206,34 @@ func (r *router) place(cands []*account, t, burn float64) *account {
 	return best
 }
 
+// placeWeekly places Codex work when no candidate has a five-hour window: on the account that has used the least share
+// of its weekly allowance (an expired window counts as unused), so that the early resets Codex windows often get waste
+// the least; ties go to the most allowance left.
+func (r *router) placeWeekly(cands []*account, t, _ float64) *account {
+	var best *account
+	bestU, bestRoom := math.Inf(1), math.Inf(-1)
+	for _, a := range usable(cands, t) {
+		uW, _ := a.weekly(t)
+		if room := (1 - uW) / a.kW(); uW < bestU || uW == bestU && room > bestRoom {
+			best, bestU, bestRoom = a, uW, room
+		}
+	}
+	return best
+}
+
+// usable drops exhausted and held accounts. If all are, an account known to pay with credits beats one that might
+// answer with a 429, or run into its reserve.
+func usable(cands []*account, t float64) []*account {
+	cs := slices.DeleteFunc(slices.Clone(cands), func(a *account) bool { return a.exhausted(t) || a.held(t) })
+	if len(cs) == 0 {
+		cs = slices.DeleteFunc(slices.Clone(cands), func(a *account) bool { return a.credits <= 0 })
+	}
+	if len(cs) == 0 {
+		cs = cands
+	}
+	return cs
+}
+
 // share is x relative to the best value among the feasible accounts.
 func share(x, best float64) float64 {
 	if best > 0 {
@@ -249,6 +310,9 @@ func (r *router) observe(rec *pluginapi.UsageRecord, now float64) {
 	a.accWShort += dW
 	a.accWLong += dW
 	a.u5, a.r5, a.uW, a.rW, a.tObs = u5, r5, uW, rW, t
+	if v, err := strconv.ParseBool(rec.ResponseHeaders.Get("X-Codex-Credits-Has-Credits")); err == nil {
+		a.credits = map[bool]int{true: 1, false: -1}[v]
+	}
 
 	if s := r.sessions[sid]; s == nil {
 		r.sessions[sid] = &session{a, cost, t}
