@@ -2,3 +2,4 @@
 *.dylib
 *.h
 dist/
+testdata/work.tsv*

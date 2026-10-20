@@ -16,17 +16,44 @@ const (
 	kindFork
 )
 
-// sessionKey maps CPA's canonical session ids to an agent kind and the binding it uses. Claude Code subagents
-// share the parent's session and get ids like "claude:<session>:agent:<agent-id>"; they don't read the parent's
-// cache, so they get their own binding. Any other session with a parent is a fork and follows the family.
-func sessionKey(sid, parent string) (int, string) {
+// sessionKey returns a session's agent kind and binding key. A chat's subagents ("<chat>:agent:<id>") share prompt
+// prefixes with each other but never with the chat, so they share one binding of their own, unless own binds each
+// alone. The family comes from the id, as CPA gives a nested Codex subagent its parent thread as parent. Any other
+// session with a parent is a fork, which reads its parent's cache and so follows it.
+func sessionKey(sid, parent string, own bool) (int, string) {
 	switch {
-	case strings.Contains(sid, ":agent:"):
+	case strings.Contains(sid, ":agent:") && own:
 		return kindSubagent, sid
+	case strings.Contains(sid, ":agent:"):
+		family, _, _ := strings.Cut(sid, ":agent:")
+		return kindSubagent, family + ":agent"
 	case parent != "":
 		return kindFork, parent
 	}
 	return kindMain, sid
+}
+
+// toolSearch reports whether Claude Code sent the request with tool search on (MCP tools deferred).
+func toolSearch(h http.Header) bool {
+	return strings.Contains(strings.Join(h.Values("Anthropic-Beta"), ","), "advanced-tool-use-")
+}
+
+// cacheKey names the prompt prefix a request shares with other chats: its model's tools and the system prompt of
+// its kind of agent.
+func cacheKey(model string, kind int) string {
+	if kind == kindSubagent {
+		return model + "/subagent"
+	}
+	return model
+}
+
+// cacheTTL is how long, in minutes, a shared prefix stays readable after the last request that sent it, less a
+// margin: Claude Code caches main chats for an hour and subagents for five minutes.
+func cacheTTL(kind int) float64 {
+	if kind == kindSubagent {
+		return 4
+	}
+	return 55
 }
 
 // pickProvider is the provider shared by every candidate (mixed-mode picks leave Provider empty).
