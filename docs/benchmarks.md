@@ -25,6 +25,19 @@ margins:
 - In the 1.6 days after tool search was turned on, fill-first was level with it at 2×.
 - With a daily plugin restart, its lead over fill-first at 1.25× as recorded shrinks to 0.33% (−0.49 to −0.17).
 
+The ten-day results were measured before the [expiring-allowance rule](#expiring-allowance) was added. On the ten-day
+recording, with tool search on, its effect on work served (0.9× and 1×) and quota per unit of work (0.9× to 1.25×) is
+not significant; it spends slightly more at 2× (0.032%*) and, with a daily restart, 0.058%* more at 1× (+0.010 to
++0.107). On a 27-day recording with tool search on it serves 0.55–0.90% more work at 0.7× to 0.9×; at 1× its small
+gain doesn't hold up when that recording's openings are estimated differently. With openings as recorded, it serves
+0.058% more at 0.9× (not significant after correction for multiple comparisons) and no significant change at 1×.
+
+On that 27-day recording with tool search on, this version with the rule spent 0.68–0.90% less Claude quota per unit of
+work than round-robin, 0.26–1.23% less than fill-first at 0.7× to 2×, and 0.14–0.19% less than v0.1.1 at each of
+those capacities except 0.8×, where the 0.05% gap isn't significant. It served 0.73–3.34% more work than round-robin
+at 0.7× to 1× and as much as v0.1.1, with no gap at 0.9×. Its Codex credits were 2.7% above round-robin's.
+See [over 27 days](#27-days).
+
 > [!IMPORTANT]
 > Subscription limits and their token accounting are not published, and account capacity and plans are assumed.
 > Replays of the periods when the plugin ran find caches warmer than the recording did: 2–17 percentage points fewer
@@ -45,13 +58,13 @@ margins:
 | As recorded, tool search on | Tool search is Claude Code's `ENABLE_TOOL_SEARCH=true`, which defers MCP tools instead of sending them in full. *As recorded* replays the openings as they were: tool search off for the first 8.6 days and on for the last 1.6 (from 2026-10-12 22:16). *Tool search on* replays the first 8.6 days with MCP tools deferred too |
 | Round-robin, fill-first | CPA's built-in routing with session affinity and `session-affinity-subagents`, the author's configuration. Round-robin rotates through the accounts; fill-first takes the first |
 | v0.1.1 | The release the author ran during the recording, which gave each subagent a binding of its own |
-| This version | This branch: a chat's subagents on one shared binding, or with tool search on one each; forks on their parent's binding; Claude picks preferring warm accounts |
+| This version | This branch: a chat's subagents on one shared binding, or with tool search on one each; forks on their parent's binding; Claude picks preferring warm accounts, unless the cold pick's weekly allowance is expiring clearly faster (the [expiring-allowance rule](#expiring-allowance), added after the ten-day tables were measured) |
 | Opening | The prompt prefix chats share: the tools and the agent's system prompt |
 | Cold start | A chat's first request that read nothing from cache |
 | Workflow agent | A subagent launched by a workflow run |
 | Harness | An A/B test harness whose agent sessions ran through the same proxy, replayed as main chats of their own class |
 | Background | Claude requests CPA's log shows but no transcript does, replayed as scaled copies of recorded main chats; only the [sensitivity](#sensitivity) table includes them |
-| Seeds | Each cell replays 20 seeds, each with its own weekly phases and starting usage; cells marked † replay 40. Changes are paired by seed, with 95% t-intervals |
+| Seeds | Each cell replays 20 seeds, each with its own weekly phases and starting usage; cells marked † replay 40. The main ten-day tables use seeds 1–20, or 1–40 where marked †; the [expiring-allowance rule](#expiring-allowance) and [over 27 days](#27-days) use 40 seeds, 101–140. The rule was chosen on the ten-day recording's seeds 101–140, so only its 27-day runs are out of sample. Changes are paired by seed, with 95% t-intervals |
 | `*` | The change's 95% paired interval excludes 0 |
 
 ## Results
@@ -140,12 +153,22 @@ that rule, and the replay doesn't measure it.
 <a id="work-served-gap"></a>
 **The work-served gap.** At 0.9× with tool search on, this version spends 0.20% less than v0.1.1 per unit of work (−0.28
 to −0.12) but serves 0.19% less work (−0.37 to −0.02), and 112 more requests go unserved (+17 to +206; 40 seeds). Its
-accounts reach their five-hour or weekly limit 2.40 times per replay against 1.85 for v0.1.1 (+0.55, +0.14 to +0.96; 40
-seeds); the 429 counts are level (1.62 against 1.48). A request goes unserved only when every account is cooling down or
-at its limit, so the extra limit episodes are the likely cause, but the replay doesn't trace each request. Without the
-warm-cache rule the gap closes (+0.03% work against v0.1.1, −0.03 to +0.09), but the rule saves 0.19–0.60% across the
-six cells of the [alternatives table](#alternatives-tested-and-rejected), significant in five, so it stays. At 1× the
-gap is 0.03% and not significant (−0.10 to +0.03).
+accounts reach their five-hour or weekly limit more often (2.40 times per replay against 1.85). Measured: 91% of its
+unserved requests at 0.9× come while all four accounts have used up their week, so the gap most likely comes from
+weekly allowance that expired earlier rather than from five-hour limits; that is our inference, since the checks below
+compare this version with and without the warm-cache step, not against v0.1.1. Comparing this version with and without the warm-cache step on seeds 1–16 at 0.9×, the work the step costs
+tracks the weekly allowance that expired before demand peaked (correlation −0.98), but two seeds carry that: with the
+step, seed 14 served 17.8M fewer units of work and seed 15 22.7M fewer, and 9 of the 16 seeds served exactly the same.
+At 1×, seeds 115 and 117 served 68.2M and 17.7M fewer. In those four seeds the loss starts when the plugin starts and
+has observed no account: weekly pacing would pick an account it hasn't observed, but the warm-cache step moves the
+chat to one that has served the model, and an account whose week reset hours later with 75–460M units unused got less
+work. That this also makes up the gap to v0.1.1 is our inference; the replay doesn't trace it. Letting a pick of an
+unobserved account stand fixed seed 15 but hurt seed 7 and spent 0.34% more quota with daily restarts, so it was
+rejected. The [expiring-allowance rule](#expiring-allowance) doesn't cover this case: an account's urgency is 0 until it
+has reported its weekly reset. Without the warm-cache rule the gap closes (+0.03% work against v0.1.1, −0.03 to
++0.09), but the rule saves 0.19–0.60% across the six cells of the
+[alternatives table](#alternatives-tested-and-rejected), significant in five, so it stays. At 1× the gap is 0.03% and
+not significant (−0.10 to +0.03).
 
 ### Before and after tool search
 
@@ -167,6 +190,136 @@ any capacity. Scored on them alone (every replay still runs from the start, so c
 | 1× | −0.89%* (−1.13 to −0.64) | −2.48%* (−3.11 to −1.85) | −0.28%* (−0.36 to −0.20) |
 | 1.25× | −1.38%* (−1.82 to −0.95) | −0.80%* (−1.21 to −0.39) | −0.26%* (−0.32 to −0.20) |
 | 2× | −1.33%* (−1.49 to −1.17) | +0.00% (−0.000 to +0.002) | −0.25%* (−0.33 to −0.16) |
+
+<a id="expiring-allowance"></a>
+### The expiring-allowance rule
+
+The warm-cache step keeps a cold pick whose weekly allowance is expiring clearly faster than the warm account's ([how it
+works](how-it-works.md#keeping-a-cold-pick-whose-allowance-is-expiring)). Replayed over 27 days with tool search on, it
+serves 0.55–0.90% more Claude work when the accounts run short (0.7× to 0.9×). At 0.9× a smaller gain stays significant
+when the weeks before the proxy are left out (+0.386%, +0.091 to +0.681; 676 fewer requests unserved, against 1,129),
+and with the ten-day recording's openings on the overlap it is +0.635% (+0.355 to +0.914). At 1× it is not
+robust: +0.213% here, which doesn't survive correction for multiple comparisons, and not significant in either of those
+checks. At 1.25× there is no gain, and at 2× it spends 0.021% more quota per unit of work. With openings as recorded
+the gain is about 0.06% at 0.9× and not significant at 1×. The effect is modest, how it serves more work is inferred
+rather than measured, and the realistic capacity on this recording is uncertain (below).
+
+The 0.3 lead was chosen on the ten-day recording, screened on seeds 1–16 and then picked on its seeds 101–140,
+before any run on this recording, and the 27-day runs below played no part in the choice. Compared directly, the
+ten-day runs don't favour it over an urgency of at least 0.5 on quota; the 27-day runs favour it on work served
+([other forms](#alternatives-tested-and-rejected)). This recording adds about 17 days that choice didn't see, but its
+10-04 to 10-14 span overlaps the ten-day recording, where its re-estimated openings make the work heavier with tool
+search on (below).
+
+Measured change with the rule against this version without it, 40 paired seeds (101–140), tool search on unless stated:
+
+| Capacity | Work served | Unserved per replay | Quota per unit of work | 429s | Expired allowance | Cold picks kept / warm-step moves |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.7× | +0.553%* (+0.342 to +0.764) | −866* | −0.015% (−0.068 to +0.038) | −0.2 | −16.0M* | 16 / 998 |
+| 0.8× | +0.899%* (+0.653 to +1.145) | −1,579* | +0.030% (−0.028 to +0.088) | −0.2 | −37.9M* | 22 / 1,280 |
+| 0.9× | +0.644%* (+0.361 to +0.927) | −1,129* | −0.025% (−0.071 to +0.020) | −0.9* | −44.0M* | 25 / 1,510 |
+| 1× | +0.213%* (+0.048 to +0.378) | −336* | −0.015% (−0.048 to +0.017) | −0.5* | −40.2M* | 30 / 1,709 |
+| 1.25× | +0.008% (−0.008 to +0.025) | −13 | 0.000% | −0.1 | −47.1M* | 42 / 1,912 |
+| 2× | 0 | 0 | +0.021%* (+0.018 to +0.024) | 0 | −43.1M* | 44 / 1,808 |
+| 1×, daily restart | +0.183%* (+0.018 to +0.349) | −171* | 0.000% | −0.6* | −24.4M* | 18 / 1,326 |
+| 0.9×, openings as recorded | +0.058%* (+0.006 to +0.110) | −123* | −0.008% | −0.1 | −6.5M* | 4 / 493 |
+| 1×, openings as recorded | +0.023% (−0.005 to +0.050) | −79* | +0.013% | −0.1 | −10.1M* | 6 / 640 |
+
+Expired allowance is the Claude weekly allowance left unused at the weekly resets, per replay; the last column counts,
+per replay, how often the warm step would have moved a pick and how often the rule kept it. Both openings-as-recorded
+rows route by round-robin until 2026-10-05 08:47, when the plugin started, and by the plugin after.
+
+Separate checks reran the 0.9× and 1× cells with the same seeds on three other versions of the replay. The last takes
+the opening sizes for the rows that overlap the ten-day recording from that recording (below):
+
+| Replay | 0.9× work served | 0.9× unserved | 1× work served | 1× unserved |
+| --- | ---: | ---: | ---: | ---: |
+| Round-robin until 2026-10-05 08:47, the plugin after | +0.450%* (+0.176 to +0.725) | −940* | not run | not run |
+| Proxied requests only, from 2026-10-04 07:36 | +0.386%* (+0.091 to +0.681) | −676* (−1,202 to −151) | +0.017% (−0.028 to +0.061) | −34 (−115 to +47) |
+| Overlap's openings from the ten-day recording | +0.635%* (+0.355 to +0.914) | −1,119* (−1,683 to −556) | +0.144% (−0.034 to +0.323) | −226 (−538 to +86) |
+
+Without the rule, the proxied-only replay leaves 3,613 requests unserved at 0.9× and 785 at 1×. The round-robin start
+alone lowers the 0.9× gain from +0.644% to +0.450%, and adding openings as recorded takes it to +0.058%, so most of
+that drop comes with the openings rather than the round-robin start; splitting it this way is inferred, since the two
+effects need not add. Quota per unit of work changed significantly in no rerun; with the
+ten-day openings it moved −0.008% at 0.9× (−0.050 to +0.034) and −0.027% at 1× (−0.057 to +0.002). The 0.7× to 0.9×
+cells (p ≤ 4.3e-5) survive correction for multiple comparisons; the 1× cell (p = 0.013), the 1× daily-restart cell
+(p = 0.031) and the 0.9× openings-as-recorded cell (p = 0.029) don't survive Holm correction. So with tool search on
+the 0.9× gain holds in every rerun, while the 1× gain fails correction and both reruns that test it. Keeping the cold
+pick whenever its own urgency is at least 0.25 serves about as much more work (level with this rule from 0.7× to 1×),
+so picking this rule from several didn't inflate the work gain; at least 0.5 serves less (below).
+
+**Why it helps.** Measured: with the rule, 16–47M fewer units of weekly allowance expire unused per replay, and the
+work it adds lands on crunch days: at 0.9×, 143 fewer requests unserved on 10-06 and 738 fewer on 10-18 (both `*`). The
+27 days have two weekly crunches, 10-05 to 10-08 and 10-16 to 10-18, matching CPA's real "All credentials ... cooling
+down" events on 10-05 (03:18, 05:23 and 17:58), 10-08 04:36 and 10-16 21:46. Inferred, not measured: allowance saved
+from expiring at a weekly reset becomes served work when a shortage follows, but that isn't the only route. On the
+ten-day recording at 0.9×, seed 107 left 6M fewer units unused at a 10-06 04:42 reset before its 10-07 crunch and
+served 5.5M more units of work, while seed 101 served 2.3M more with no reset saving allowance before its crunch.
+Across its 40 seeds the rule's effect there is not significant: work served +0.060% at 0.9× (−0.045 to +0.166)
+and +0.127% at 1× (−0.052 to +0.307); quota per unit of work −0.002%, +0.024% and −0.008% at 0.9×, 1× and 1.25×, but
++0.032%* at 2× and +0.058%* at 1× with a daily restart.
+
+**The 27-day recording.** `testdata/extract.py` with `since` set to 2026-09-19 treats every Claude Code transcript
+from then on as proxied. Its requests run from 2026-09-21 23:55 to 2026-10-19 00:00 UTC: 174,887 Claude requests,
+3,382M units of work with tool search on. The author's Claude Code didn't go through CPA before 2026-10-04 07:36, where
+the ten-day recording starts, so the 39,740 Claude requests before then are transcripts replayed as if they had: the
+demand is real, but those accounts never served it through the proxy. They include no harness sessions; the harness's
+6,335 Claude requests all come later. Most of the harness's agent sessions from 10-11 to 10-13 have since been deleted,
+so only 362 of the ten-day recording's 15,120 harness rows could still be extracted; the 27-day recording takes all
+15,120 from the ten-day recording instead. Its other rows from 10-04 07:36 to 10-14 13:34 match the ten-day
+recording's one for one, but extracting over 27 days re-estimates their openings. Taking the openings from the ten-day
+recording changes the opening columns of 39,674 rows, mostly the size of the deferred tool list, and the opening size
+itself of 5,985, 3,632 of them Codex. On the 1,958 Claude main-chat rows among those, the median opening is about 25k
+tokens here and 216k in the ten-day recording, which matches the 185–230k [recorded before tool
+search](#what-the-replay-does). With tool search on, deferring the tools takes about 197k off a 216k opening but only
+about 7k off a 25k one, so the smaller estimates leave the overlap's Claude work about 0.9% heavier (1,595.0M units
+against 1,580.7M with the ten-day openings). The check above that takes those openings from the ten-day recording keeps
+the 0.9× gain (+0.635%*) and loses the 1× one (+0.144%, not significant). The replay assumes the same accounts before
+10-04 as after (the default
+`SIM_PLANS`), and the plugin routes throughout unless a row says otherwise.
+
+**Calibration caveat.** With openings as recorded, the replay of this recording reproduces the real 10-05 03:18
+run-out in most seeds only at about 0.7× (33 of 40 seeds; at 1×, 4 of 40), unlike the ten-day
+[capacity check](#capacity) (0.9×: 39 of 40). Yet in the same runs 0.9× runs out on 10-06 in 38 of 40 seeds, when no
+real all-credentials event happened. With tool search on, 0.7× reproduces the 03:18 run-out in only 14 of 40 seeds. So
+which capacities are realistic on this recording is uncertain.
+
+<a id="27-days"></a>
+### Over 27 days
+
+On the [27-day recording](#expiring-allowance) with tool search on, this version, with the expiring-allowance rule,
+spent less Claude quota per unit of work than round-robin, fill-first and v0.1.1 at every capacity, significantly in
+17 of 18 cells. It served more work than round-robin and fill-first whenever the accounts ran short, and about as much
+as v0.1.1. Its first 12 days are transcripts from before the proxy, replayed as if routed, and which capacities are
+realistic here is uncertain (the calibration caveat above). v0.1.1 is that release's plugin code, built against the
+current replay. All cells use 40 paired seeds (101–140).
+
+| Capacity | Quota per unit of work vs round-robin | vs fill-first | vs v0.1.1 |
+| --- | ---: | ---: | ---: |
+| 0.7× | −0.68%* (−0.77 to −0.58) | −1.23%* (−1.36 to −1.10) | −0.16%* (−0.22 to −0.10) |
+| 0.8× | −0.80%* (−0.89 to −0.72) | −1.23%* (−1.32 to −1.14) | −0.05% (−0.12 to +0.01) |
+| 0.9× | −0.86%* (−0.92 to −0.79) | −1.20%* (−1.28 to −1.13) | −0.14%* (−0.18 to −0.10) |
+| 1× | −0.86%* (−0.91 to −0.81) | −1.17%* (−1.25 to −1.10) | −0.15%* (−0.18 to −0.12) |
+| 1.25× | −0.90%* (−0.95 to −0.86) | −1.05%* (−1.13 to −0.98) | −0.19%* (−0.21 to −0.16) |
+| 2× | −0.80%* (−0.84 to −0.77) | −0.26%* (−0.31 to −0.22) | −0.15%* (−0.17 to −0.13) |
+
+| Capacity | Unserved of 174,887: this version / round-robin / fill-first / v0.1.1 | Work served vs round-robin | vs fill-first | vs v0.1.1 |
+| --- | --- | ---: | ---: | ---: |
+| 0.7× | 23,977 / 28,751 / 33,360 / 24,103 | +3.32%* (+2.44 to +4.20) | +6.89%* (+5.59 to +8.20) | +0.07% (−0.10 to +0.25) |
+| 0.8× | 10,127 / 15,344 / 19,638 / 10,143 | +3.34%* (+2.71 to +3.98) | +6.71%* (+5.55 to +7.86) | +0.02% (−0.14 to +0.18) |
+| 0.9× | 2,542 / 6,137 / 9,187 / 2,663 | +2.36%* (+1.86 to +2.85) | +4.80%* (+4.00 to +5.60) | +0.08% (−0.09 to +0.25) |
+| 1× | 268 / 1,393 / 2,996 / 308 | +0.73%* (+0.37 to +1.10) | +2.12%* (+1.57 to +2.66) | +0.02% (−0.04 to +0.08) |
+| 1.25× | 0 / 0 / 356 / 0 | 0.00% | +0.24%* (+0.11 to +0.38) | 0.00% |
+
+At 2× nothing goes unserved. The ten-day [work-served gap](#work-served-gap) to v0.1.1 at 0.9× doesn't appear here.
+Measured: without the rule, this version serves less than v0.1.1 on this recording too, by 0.47–0.86% at 0.7× to
+0.9× (0.55% at 0.9×, each `*`), so here the rule's 0.55–0.90% gain closes the gap. How the rule adds that work is
+inferred, as above. Against round-robin the quota saving is smaller than on the ten-day recording with tool search on:
+0.68–0.90% here, against 1.14–1.31% there. Codex is replayed the same in every seed and at every Claude capacity. At
+the estimated Codex capacity this version paid 1,096.7M units in credits over the 27 days: 2.7% more than round-robin
+(1,067.9M), unlike its 14% saving over ten days; 17% less than fill-first (1,323.5M); and 0.1% less than v0.1.1
+(1,097.7M). The replay doesn't trace why.
 
 ### Codex
 
@@ -252,6 +405,59 @@ The same warm rule applied to Codex picks too, keyed like Claude's by requested 
 unchanged and spent 27.9% more Codex credits at 2× Codex capacity (32.8M against 25.7M), and 0.16% and 0.27% fewer
 at 1× and 1.5×. Codex stays out of the rule.
 
+**Other forms of the expiring-allowance rule.** A screen on the ten-day recording with tool search on (seeds 1–16; 0.9×,
+1× and 1.25×) tried fifteen forms: keeping the cold pick whenever its own urgency is at least 0.15, 0.25, 0.35, 0.5 or
+1.0; at least 0.25 or 0.5 for new main chats only; at least 0.25 only when its projected weekly leftover is at least 10%
+or 20%, or only when the candidates' average projected weekly usage is at least 55%; any leftover when its weekly reset
+is within 12, 24 or 48 hours; and a lead of 0.15 or 0.3. Against no rule, ten spent significantly more quota per unit of
+work at 1× or 1.25× (at least 1.0 by only 0.007%*). Of the other five, main chats only at 0.5 and the 20% floor cut
+expired allowance by no significant amount, and a reset within 12 hours, which cut it, wasn't carried forward either.
+That left the 0.3 lead and at least 0.5, with no significant quota change at any capacity and less allowance expiring
+(−19.8M* and −18.3M* at 0.9×). Both went on to the ten-day recording's seeds 101–140 (0.9× to 2×), and so did at least
+0.15 and at least 0.25, although on the screen they had spent more at 1× (+0.236%* and +0.146%*), and at least 0.15 also
+at 1.25× (+0.130%*). On those seeds the 0.3 lead was the only form with no significant quota increase over no rule at
+0.9× to 1.25× (−0.002%, +0.024%, −0.008%): at 1.25× at least 0.15, 0.25 and 0.5 spent 0.133%*, 0.064%* and 0.035%* more.
+At 2× all four spent more, the lead least (+0.032%*). That picked the lead, before any 27-day run; with the ten-day
+recording replayed twice over, it was again the only form tested there without a significant increase at 0.9× to 1.25×,
+on both seed sets. With a daily restart it was also the only one level with no rule at 1.25×, but at 1× it spent 0.058%*
+more, where at least 0.5 was level (+0.004%). Compared directly with the lead, at least 0.25 spent 0.071%* more at 1.25×
+(+0.031 to +0.112), but at least 0.5 didn't: +0.043% at 1.25× (−0.004 to +0.091, not significant) and 0.047%* less at 1×
+(−0.085 to −0.009). So the ten-day runs don't favour the lead over at least 0.5 on quota. The 27-day runs (seeds
+101–140), which played no part in the choice, favour the lead on work served, the point of the rule, since the shortage
+is what loses work: it served more than at least 0.5 at 0.8× (+0.132%*) and 0.9× (+0.167%*). At least 0.25 was level
+with it in work served from 0.7× to 1×, but spent 0.053%* more quota than the lead at 1.25× and 0.046%* more at 2×.
+
+**Avoiding forced moves.** A *forced move* takes a chat off an account where its cache is still warm because that
+account reached its five-hour or weekly limit. Measured on the ten-day recording with tool search on (seeds 101–140):
+
+| Capacity | Forced moves per replay | Main / subagent / workflow / Claude via Codex | Five-hour / weekly | Cost | Share of quota |
+| --- | ---: | --- | --- | ---: | ---: |
+| 0.9× | 22.2 | 5.4 / 8.9 / 6.5 / 1.5 | 11.3 / 10.9 | 7.02M | 0.461% |
+| 1× | 13.0 | 3.2 / 5.8 / 3.9 / 0.2 | 6.9 / 6.1 | 4.30M | 0.278% |
+| 1.25× | 6.6 | 0.9 / 4.6 / 1.1 / <0.1 | 5.3 / 1.3 | 2.00M | 0.126% |
+| 2× | 0.5 | | | 0.28M | 0.018% |
+| 1×, daily restart | 27.5, of which 14.4 at no limit: the restart forgot the binding | | | 11.45M | 0.728% |
+
+These are the same moves the [Claude table](#claude) counts as warm chats moved, without the expiring-allowance rule
+in both, but on seeds 101–140 rather than 1–40, and the count varies widely by seed: 13.0 here at 1× against 9 there
+(seeds 1–16 alone average 7.3).
+
+43 variants were screened on seeds 1–16: a separate five-hour margin for the warm step (projected usage at most 60% to
+90%), a weekly margin, room relative to the pick, scarcity gates, burn rates that react to bursts (the larger of the
+30-minute and 5- or 10-minute rates), room reserved for live chats (at 0.5× or 1× their burn, per chat, or for chats
+just placed), and combinations. The best, held out on seeds 101–140, change in Claude quota per unit of work with tool
+search on (+: the variant spends more):
+
+| Variant | 0.9× | 1× | 1.25× | 2× | 1×, daily restart | Decision |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Warm step needs projected five-hour usage at most 85% | +0.023% | −0.041% | −0.032% | +0.004%* | +0.034% | Rejected |
+| Warm step's margin check adds 0.5× the account's burn | +0.025% | +0.008% | +0.007% | +0.006% | +0.048% | Rejected |
+| Both | +0.032% | +0.010% | +0.016% | +0.014%* | +0.053%* | Rejected |
+| No warm-cache rule | +0.249%* | +0.230%* | +0.236%* | +0.224%* | +0.372%* | Kept the rule |
+
+None did significantly better. Stricter warm-step margins avoid 1–4 forced moves per replay but cause about as many
+cold starts, and cautious burn projections concentrate work and add moves.
+
 ## What the replay does
 
 `sim_test.go` replays every model request recorded on the author's machine from 2026-10-04 07:36 to 2026-10-14 13:34
@@ -259,7 +465,7 @@ UTC: 69,546 Claude requests (Claude Code main chats, subagents and workflow agen
 Claude models used through Codex) and 81,091 Codex requests. `testdata/extract.py` reads them from Claude Code
 transcripts, the harness's saved sessions and the Codex rollouts that went through CPA: start and completion, chat and
 agent IDs, client and version, model, uncached input, cache reads and writes, and output. Each policy routes the same
-requests.
+requests. The [expiring-allowance rule](#expiring-allowance) and [over 27 days](#27-days) also use a 27-day recording, described with the rule.
 
 CPA's behavior around the routing follows its v8.0.27 source. Session affinity binds a session and model to an
 account for a sliding hour, and a subagent without a binding of its own takes its parent's. Round-robin rotates per
@@ -350,7 +556,8 @@ points), and early in v0.1.1 it spends 2.5% less than was recorded. The cause is
 ## Limitations
 
 - The replay runs warmer than the recording under the plugin's routing (see the note at the top).
-- One person's ten days, with a two-day burst of very heavy use and an A/B harness running through the same proxy.
+- One person's ten days (27 for the expiring-allowance rule and over 27 days, its first 12 not proxied), with a two-day burst of very
+  heavy use and an A/B harness running through the same proxy.
 - Claude capacity and plans are unknown (above), and the meter is assumed.
 - Some traffic is known only as counts in CPA's log, and only from 2026-10-10 21:33: the harness's probes, bursts of
   requests without a session ID, and about 34k requests nothing accounts for. Their sizes are guessed.
@@ -373,9 +580,10 @@ SIM_POLICY=builtin SIM_SEEDS=20 go test -tags sim -run TestSim -count=1 -v .
 ```
 
 `-v` matters: without it `go test` hides the output of a passing test. Each run prints one JSON line per seed and
-provider; `m` has the scored requests and `bg` the background, which is routed, billed and cached like the rest but
-has no `recorded` or `rec_cold`, as its requests are copies of recorded chats. The extracted traffic stays local, and
-`testdata/work.tsv*` is ignored by git.
+provider; `m` has the scored requests and `bg` the background, which is routed, billed and cached like the rest but has
+no `recorded` or `rec_cold`, as its requests are copies of recorded chats. Claude's `expired_units` is the weekly
+allowance the accounts left unused at their weekly resets from `SIM_SCORE_FROM` on. The extracted traffic stays local,
+and `testdata/work.tsv*` is ignored by git.
 
 `testdata/extract.py`'s defaults reproduce the author's setup. Its `TOOL_SEARCH` is the date the author turned tool
 search on, 2026-10-12 22:16; set yours. Transcripts also carry a per-request signal, the `deferred_tools_delta`
@@ -386,6 +594,7 @@ The replay's settings:
 | --- | --- | --- |
 | `SIM_POLICY` | `plugin` | `plugin` (this version), `builtin` (round-robin) or `fillfirst`, both with CPA's session affinity |
 | `SIM_SEEDS` | `1` | Replays, each with its own weekly phases and starting usage |
+| `SIM_SEED_FROM` | `1` | The first seed, e.g. `101` for seeds outside the 1–16 used to screen rules |
 | `SIM_CLAUDE_SCALE` | `1` | Claude capacity, a multiple of the plan allowances |
 | `SIM_PLANS` | `20x,5x,5x@2026-10-05T17:58:54Z,20x` | Claude plans in CPA's candidate order; `plan@time` joins then |
 | `SIM_CODEX_CAPS` | `pro=140,self_serve_business_prolite=75` | Codex weekly capacity per plan, in millions of units |

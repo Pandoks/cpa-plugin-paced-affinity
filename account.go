@@ -149,6 +149,20 @@ func (a *account) project(t, b float64) (p projection) {
 	return p
 }
 
+// expiryUrgency is the share of what the five-hour limit lets the account burn before its weekly reset that the
+// allowance projected to expire unused there would take; 0 until the weekly window has been seen.
+func (a *account) expiryUrgency(t float64) float64 {
+	if a.rW < 0 {
+		return 0
+	}
+	uW, ttrW := a.weekly(t)
+	ratio := a.cap5 / a.capW // a full five-hour window as a share of the week, until both windows are measured
+	if a.sumDu5 >= 0.05 && a.sumDuW >= 0.01 {
+		ratio = a.sumDuW / a.sumDu5
+	}
+	return max(1-uW-a.longBurn(t)*ttrW, 0) * window5h / (max(ttrW, 1) * ratio)
+}
+
 // fits reports whether new work passes the margins, waiving the weekly one for allowance that would otherwise expire
 // unused. An exhausted account never fits.
 func (p projection) fits() bool {

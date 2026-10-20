@@ -272,6 +272,7 @@ type simMetrics struct {
 	WarmMoves     int                `json:"warm_moves"`     // a chat left an account where its cache was still warm
 	Rejections    int                `json:"rejections"`     // upstream 429s
 	CreditUnits   float64            `json:"credit_units"`   // Codex usage paid with credits
+	ExpiredUnits  float64            `json:"expired_units"`  // Claude weekly allowance left unused at its resets
 }
 
 type completion struct {
@@ -379,6 +380,9 @@ func newSim(t *testing.T, seed uint64, t0, scoreFrom float64, claude []string, c
 func (s *sim) advance(a *simAccount, t float64) {
 	if a.provider == "claude" {
 		for t >= a.resetW {
+			if a.resetW >= max(s.scoreFrom, a.from) {
+				s.m["claude"].ExpiredUnits += max(a.capW-a.usedW, 0)
+			}
 			a.usedW, a.resetW = 0, a.resetW+simWeek
 		}
 		if a.start5 >= 0 && t >= a.start5+simFiveH {
@@ -770,12 +774,13 @@ func TestSim(t *testing.T) {
 		}
 	}
 	seeds, _ := strconv.Atoi(envOr("SIM_SEEDS", "1"))
+	seedFrom, _ := strconv.Atoi(envOr("SIM_SEED_FROM", "1"))
 	policy := envOr("SIM_POLICY", "plugin")
 	if !slices.Contains([]string{"plugin", "builtin", "fillfirst"}, policy) {
 		t.Fatalf("unknown SIM_POLICY %q", policy)
 	}
 	enc := json.NewEncoder(os.Stdout)
-	for seed := 1; seed <= seeds; seed++ {
+	for seed := seedFrom; seed < seedFrom+seeds; seed++ {
 		reqs := slices.Clone(work)
 		if bgPath != "" {
 			reqs = append(reqs, background(t, rand.New(rand.NewPCG(uint64(seed), 11)), templates, work[0].start,

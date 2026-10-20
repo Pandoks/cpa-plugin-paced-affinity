@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"testing"
@@ -17,6 +18,8 @@ type placementQuota struct {
 	used5, usedW, days float64
 	expired5           bool
 	weeklyOnly         bool
+	noWeekly           bool    // Claude's response carries no weekly headers
+	tokens             float64 // input tokens the usage record reports
 }
 
 type placementStep struct {
@@ -162,6 +165,41 @@ func TestPlacement(t *testing.T) {
 				{at: 2, sid: "other2", model: "m", auth: "c", quota: &placementQuota{used5: .3, usedW: .2, days: 3.5}},
 				{at: 3, sid: "fresh", model: "m", candidates: "abc", want: "c"},
 			}},
+		// With a day to the weekly reset, a's urgency is 1.25 per unit of its unused allowance: a at .259999 leads b at .5
+		// by 1.25 * .240001 (just over 0.3, keeps a); a at .260001 by 1.25 * .239999 (just under, moves to b). The
+		// boundary is probed on either side of 0.3 rather than at it: an exact-equality case would depend on float
+		// operation order.
+		{"a cold chat keeps its account at a lead just over 0.3", "claude", []float64{20, 20},
+			[]placementQuota{{used5: .1, usedW: .259999, days: 1}, {used5: .1, usedW: .5, days: 1}},
+			[]placementStep{
+				{sid: "other", model: "m", auth: "b", quota: &placementQuota{used5: .1, usedW: .5, days: 1}},
+				{sid: "fresh", model: "m", candidates: "ab", want: "a"},
+			}},
+		{"a cold chat moves to the warm account at a lead just under 0.3", "claude", []float64{20, 20},
+			[]placementQuota{{used5: .1, usedW: .260001, days: 1}, {used5: .1, usedW: .5, days: 1}},
+			[]placementStep{
+				{sid: "other", model: "m", auth: "b", quota: &placementQuota{used5: .1, usedW: .5, days: 1}},
+				{sid: "fresh", model: "m", candidates: "ab", want: "b"},
+			}},
+		{"a cold chat moves to the warm account when the warm one's allowance is expiring faster", "claude", []float64{20, 20},
+			[]placementQuota{{used5: .1, usedW: 0, days: 3.5}, {used5: .1, usedW: .7, days: .4}},
+			[]placementStep{
+				{sid: "other", model: "m", auth: "b", quota: &placementQuota{used5: .1, usedW: .7, days: .4}},
+				{sid: "fresh", model: "m", candidates: "ab", want: "b"},
+			}},
+		{"a cold chat moves to a warm account projected to overrun its week", "claude", []float64{20, 20},
+			[]placementQuota{{used5: .1, usedW: .3, days: 6}, {used5: .1, usedW: .2, days: 5}},
+			[]placementStep{
+				{at: 60, sid: "burn-b", model: "x", auth: "b", quota: &placementQuota{used5: .1, usedW: .6, days: 5}},
+				{at: 3*3600 - 600, sid: "other", model: "m", auth: "b", quota: &placementQuota{used5: .1, usedW: .6, days: 5}},
+				{at: 3 * 3600, sid: "fresh", model: "m", candidates: "ab", want: "b"},
+			}},
+		{"a cold chat's urgency reads the weekly window elapsed so far, not the last stored one", "claude", []float64{20, 20},
+			[]placementQuota{{used5: .1, usedW: .9, days: .1}, {used5: .1, usedW: .7, days: 3}},
+			[]placementStep{
+				{at: 3*3600 - 600, sid: "other", model: "m", auth: "b", quota: &placementQuota{used5: .1, usedW: .7, days: 3}},
+				{at: 3 * 3600, sid: "fresh", model: "m", candidates: "ab", want: "b"},
+			}},
 		// CPA picks with the routed model and reports usage under the upstream one; both key on the client's name.
 		{"warm cache keys on the client's model", "claude", []float64{20, 20},
 			[]placementQuota{{used5: .1, usedW: .7, days: 6}, {used5: .1, usedW: .8, days: 1}},
@@ -170,10 +208,14 @@ func TestPlacement(t *testing.T) {
 					quota: &placementQuota{used5: .1, usedW: .7, days: 6}},
 				{at: 2, sid: "fresh", model: "claude-opus-5-5", alias: "smart", candidates: "ab", want: "a"},
 			}},
+		// Codex must skip the Claude-only warm step and rank weekly-only accounts by expiry urgency, not spare room. Equal
+		// weights and weekly use; a's reset is 2.2 days out and b's 2, so urgencies are .284 for a and .3125 for b and b wins
+		// on urgency. The lead, .028, is under keepCold's 0.3, so a Codex pick that ran the warm step would move to a. It is
+		// also under 0.05, so the case still catches that warm step if keepCold is lowered to 0.05.
 		{"Codex ignores cached prefixes", "codex", []float64{20, 20},
-			[]placementQuota{{usedW: .5, days: 6, weeklyOnly: true}, {usedW: .5, days: 1, weeklyOnly: true}},
+			[]placementQuota{{usedW: .5, days: 2.2, weeklyOnly: true}, {usedW: .5, days: 2, weeklyOnly: true}},
 			[]placementStep{
-				{at: 1, sid: "other", model: "m", auth: "a", quota: &placementQuota{usedW: .5, days: 6, weeklyOnly: true}},
+				{at: 1, sid: "other", model: "m", auth: "a", quota: &placementQuota{usedW: .5, days: 2.2, weeklyOnly: true}},
 				{at: 2, sid: "fresh", model: "m", candidates: "ab", want: "b"},
 			}},
 		{"Codex leaves an account spending credits", "codex", []float64{20, 20},
@@ -228,6 +270,55 @@ func TestPlacement(t *testing.T) {
 	}
 }
 
+// TestExpiryUrgency reads an account's expiryUrgency after each table's observations, at the seconds the table gives.
+func TestExpiryUrgency(t *testing.T) {
+	oneWeek := []placementQuota{{used5: .1, usedW: .5, days: 2}}
+	tests := []struct {
+		name   string
+		quotas []placementQuota // observed in order, all at placementNow
+		after  float64          // seconds after placementNow at which the urgency is read
+		want   float64
+	}{
+		{"a five-hour window seen without the weekly one", []placementQuota{{used5: .5, noWeekly: true, days: 2}}, 0, 0},
+		// half the week unused, two days to the reset: 0.5 * 300 / (2880 / 6), with cap5/capW = 7.5/45 before calibration
+		{"before calibration, a five-hour window is cap5/capW of the week", oneWeek, 0, 0.3125},
+		// Each case opens new windows, so its totals are exactly the header values. math.Nextafter puts the window under
+		// test just below its threshold, where subtracting decimal readings could land on the wrong side of it. The
+		// other window's value gives a ratio other than the prior 1/6 if the threshold were loosened.
+		// the weekly use is the float just under .01, so the ratio stays prior: 0.96 * 300 / (4320 / 6), where the weekly
+		// burn term is .01 * 4320 / 1440 = .03 and 1 - .01 - .03 = .96
+		{"weekly use under .01 keeps the prior ratio even with five-hour use past its threshold", []placementQuota{
+			{used5: .1, usedW: .5, days: 2}, {used5: .2, expired5: true, usedW: math.Nextafter(.01, 0), days: 3, tokens: 1e6}}, 0, 0.96 * 300 / (4320 / 6)},
+		// the five-hour use is the float just under .05, so the ratio stays prior: 0.72 * 300 / (4320 / 6), where the weekly
+		// burn term is .07 * 4320 / 1440 = .21 and 1 - .07 - .21 = .72
+		{"five-hour use under .05 keeps the prior ratio even with weekly use past its threshold", []placementQuota{
+			{used5: .1, usedW: .5, days: 2}, {used5: math.Nextafter(.05, 0), expired5: true, usedW: .07, days: 3, tokens: 1e6}}, 0, 0.72 * 300 / (4320 / 6)},
+		// the second report rises .051 five-hour and .011 weekly, both past their thresholds, so the ratio is .011 / .051.
+		// The weekly burn term is .011 * 2880 / 1440 = .022, so 1 - .511 - .022 = .467: 0.467 * 300 / (2880 * .011 / .051)
+		{"after calibration, a five-hour window is the observed weekly share", []placementQuota{
+			{used5: .1, usedW: .5, days: 2, tokens: 1e6}, {used5: .151, usedW: .511, days: 2, tokens: 1e6}}, 0, 0.467 * 300 * .051 / (2880 * .011)},
+		// the second report sits exactly on both thresholds; both windows are new, so the totals are the header values
+		// (.05 and .01). The ratio is .01 / .05 = .2 and the weekly burn term is .01 * 4320 / 1440 = .03, so
+		// 1 - .01 - .03 = .96: 0.96 * 300 / (4320 * .2). The tokens give the cost totals a value, as in the other cases.
+		{"exactly at both thresholds, the ratio is calibrated", []placementQuota{
+			{used5: .1, usedW: .5, days: 2}, {used5: .05, usedW: .01, days: 3, expired5: true, tokens: 1e6}}, 0, 0.96 * 300 / (4320 * .2)},
+		{"grows as the reset nears: one day out", oneWeek, 86400, 0.625},
+		{"grows as the reset nears: half a day out", oneWeek, 1.5 * 86400, 1.25},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newRouter()
+			a := p.account("a", "claude", 20)
+			for i := range tt.quotas {
+				placementObserve(t, p, "claude", placementStep{sid: "seed", auth: "a", quota: &tt.quotas[i]})
+			}
+			if got := a.expiryUrgency((placementNow + tt.after) / 60); math.Abs(got-tt.want) > 1e-9 {
+				t.Errorf("expiryUrgency = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func placementObserve(t *testing.T, p *router, provider string, s placementStep) {
 	t.Helper()
 	q := s.quota
@@ -240,8 +331,10 @@ func placementObserve(t *testing.T, p *router, provider string, s placementStep)
 	if provider == "claude" {
 		h.Set("Anthropic-Ratelimit-Unified-5h-Utilization", f(q.used5))
 		h.Set("Anthropic-Ratelimit-Unified-5h-Reset", f(reset5))
-		h.Set("Anthropic-Ratelimit-Unified-7d-Utilization", f(q.usedW))
-		h.Set("Anthropic-Ratelimit-Unified-7d-Reset", f(placementNow+86400*q.days))
+		if !q.noWeekly {
+			h.Set("Anthropic-Ratelimit-Unified-7d-Utilization", f(q.usedW))
+			h.Set("Anthropic-Ratelimit-Unified-7d-Reset", f(placementNow+86400*q.days))
+		}
 	} else {
 		if !q.weeklyOnly {
 			h.Set("X-Codex-Primary-Used-Percent", f(100*q.used5))
@@ -253,5 +346,6 @@ func placementObserve(t *testing.T, p *router, provider string, s placementStep)
 		h.Set("X-Codex-Secondary-Reset-At", f(placementNow+86400*q.days))
 	}
 	call[struct{}](t, p, pluginabi.MethodUsageHandle, pluginapi.UsageRecord{Provider: provider, Model: cmp.Or(s.upstream, s.model),
-		Alias: cmp.Or(s.alias, s.model), AuthID: s.auth, Failed: s.failed, SessionID: s.sid, ParentSessionID: s.parent, ResponseHeaders: h}, placementNow+s.at)
+		Alias: cmp.Or(s.alias, s.model), AuthID: s.auth, Failed: s.failed, SessionID: s.sid, ParentSessionID: s.parent, ResponseHeaders: h,
+		Detail: pluginapi.UsageDetail{InputTokens: int64(q.tokens)}}, placementNow+s.at)
 }

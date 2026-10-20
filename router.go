@@ -15,6 +15,7 @@ const (
 	weeklyWeight   float64 = 2
 	weeklyLanding  float64 = 1.1         // elapsed-week target, capped at the full allowance
 	gateLo, gateHi float64 = 0.4, 0.7    // weekly pressure that switches the weekly-expiry term on
+	keepCold       float64 = 0.3         // expiry urgency by which a cold pick must lead a warm one to keep the work
 	sessionTTL     float64 = 7 * 24 * 60 // forget idle sessions
 )
 
@@ -85,11 +86,14 @@ func (r *router) pick(provider, model, sid, parent string, own bool, cands []plu
 	}
 	a := choose(cs, t, burn)
 	// A Claude chat starts by sending its model's tools and system prompt, which other chats sent too; on an
-	// account that served them within the cache TTL it reads them instead of writing them again.
+	// account that served them within the cache TTL it reads them instead of writing them again, unless the pick's
+	// expiry urgency leads the warm choice's by keepCold.
 	if ck := cacheKey(model, kind); provider == "claude" && t-a.seen[ck] > cacheTTL(kind) {
 		skip := func(w *account) bool { return t-w.seen[ck] > cacheTTL(kind) || !w.project(t, burn).fits() }
 		if warm := slices.DeleteFunc(slices.Clone(cs), skip); len(warm) > 0 {
-			a = choose(warm, t, burn)
+			if w := choose(warm, t, burn); a.expiryUrgency(t)-w.expiryUrgency(t) < keepCold {
+				a = w
+			}
 		}
 	}
 	r.bindings[key] = &binding{a, t}

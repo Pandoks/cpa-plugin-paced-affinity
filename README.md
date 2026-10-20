@@ -4,9 +4,9 @@
 
 A [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) plugin that routes Claude and Codex chats across
 your subscription accounts. It keeps CPA's session affinity and adds quota and cache awareness: new chats go where
-their prompt is already cached and allowance is available, and accounts at their limit are left alone, including a
-Codex account that would otherwise keep running on paid credits. It uses usage data CPA already receives, without
-extra requests.
+their prompt is already cached and allowance is available, unless another account's weekly allowance is expiring
+clearly faster, and accounts at their limit are left alone, including a Codex account that would otherwise keep
+running on paid credits. It uses usage data CPA already receives, without extra requests.
 
 [How it works](docs/how-it-works.md) has the rules: warm chats stay put, new main chats are paced by weekly usage,
 and a chat's subagents stay together unless Claude Code's tool search (which defers MCP tools) is on.
@@ -16,7 +16,16 @@ it used 1.0–2.1% less Claude quota per unit of work (quota spent divided by wh
 than CPA's built-in round-robin or fill-first routing (each significant at 95%), and, at the estimated Codex capacity
 (weekly allowances estimated from the logs), 14% fewer paid Codex credits than round-robin and 30% fewer than
 fill-first. Account limits and plans in the replay are assumed, and under this plugin the replay finds caches warmer
-than the real traffic did, so it may overstate the gain. See [benchmarks](docs/benchmarks.md).
+than the real traffic did, so it may overstate the gain. Those figures predate the rule for expiring allowance, which in
+a 27-day replay with tool search on served 0.55–0.90% more work at 0.7× to 0.9× the assumed allowances, showed no
+gain at 1× that holds up when the replay's openings are estimated differently, and spent 0.021% more quota per unit of
+work at 2×. On the ten-day recording it had no significant effect on work served and spent 0.032% more quota at 2×
+and 0.058% more at 1× with a daily plugin restart. Over the 27 days, this version with the rule used 0.7–0.9% less
+Claude quota per unit of work than round-robin and 0.3–1.2% less than fill-first, served 0.7–3.3% more work than
+round-robin at 0.7× to 1×, and served as much as v0.1.1 while spending 0.14–0.19% less per unit of work at five of
+six capacities (not significant at 0.8×); there it paid 2.7% more Codex credits than round-robin
+([over 27 days](docs/benchmarks.md#27-days)). See [benchmarks](docs/benchmarks.md),
+including the [smaller gain](docs/benchmarks.md#expiring-allowance) with openings as recorded.
 
 ## Installation
 

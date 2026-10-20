@@ -26,7 +26,9 @@ a chat identity, the plugin takes these steps in order:
 4. **Claude only: prefer a warm account.** If step 3's pick hasn't recently served the same model and kind of agent,
    the plugin applies step 3's rule to the accounts that have and that pass the margins. The chat then reads its
    shared prompt prefix from cache instead of writing it again (see
-   [placing a chat where its prompt is cached](#placing-a-chat-where-its-prompt-is-cached)).
+   [placing a chat where its prompt is cached](#placing-a-chat-where-its-prompt-is-cached)), unless step 3's pick's
+   weekly allowance is expiring clearly faster than the warm account's, relative to how fast each can spend it
+   ([keeping a cold pick](#keeping-a-cold-pick-whose-allowance-is-expiring)).
 
 ## Margins
 
@@ -186,16 +188,57 @@ The rule applies to any Claude pick without a live binding: a new or resumed cha
 a fork, and a retry after a 429. If step 3's pick has served the model within the cache lifetime (55 minutes for main
 chats, 4 for subagents, a margin under Claude Code's one hour and five minutes), it stands. Otherwise the plugin
 applies step 3's rule to the accounts that have served it and pass the projected margins; if there are none, the
-original pick stands.
+original pick stands. It also stands if its weekly allowance is expiring clearly faster than the warm account's
+([below](#keeping-a-cold-pick-whose-allowance-is-expiring)).
 
-| Account | Served this model | Weekly deficit | Margins | Decision |
-| --- | --- | ---: | --- | --- |
-| A | 10 minutes ago | −54 percentage points | Pass | **New chat goes here** |
-| B | 3 hours ago | +74 percentage points | Pass | Would win on pacing alone |
+| Account | Served this model | Weekly used | Reset in | Weekly deficit | Expiry urgency | Margins | Decision |
+| --- | --- | ---: | --- | ---: | ---: | --- | --- |
+| A | 10 minutes ago | 70% | 6 days | −54 percentage points | 0.06 | Pass | The warm choice |
+| **B** | **3 hours ago** | **20%** | **1 day** | **+74 percentage points** | **1.00** | **Pass** | **New chat goes here** |
+
+Pacing picks B, and the warm step would move the chat to A, the only warm account. But with no recent burn, B's 80% would
+expire in a day, and using it would take B's fastest pace for the whole day, while A has six days for its 30%. B's
+[expiry urgency](#keeping-a-cold-pick-whose-allowance-is-expiring) (here with the assumed r = 1/6) leads A's by 0.94,
+at least 0.3, so B keeps the chat. Without that rule, A would get it.
 
 Codex is left out. It reports no cache writes, so whether it charges more for them is unknown, and in the replay a
 Codex warm rule spent more credits when the Codex accounts had room
 ([benchmarks](benchmarks.md#alternatives-tested-and-rejected)).
+
+### Keeping a cold pick whose allowance is expiring
+
+Moving work to a warm account saves writing the opening again, but it can leave the cold pick's weekly allowance to
+expire unused. So the plugin compares the two accounts' *expiry urgency*: the share of its fastest pace, a full
+five-hour window every five hours, that an account would have to keep up until its weekly reset to use the allowance
+projected to expire there. If the cold pick's urgency is at least 0.3 above the warm account's, the cold pick stands.
+
+```text
+weekly leftover = max(0, 1 − weekly usage − recent weekly burn rate × time until weekly reset)
+r = a full five-hour window as a share of the weekly allowance
+expiry urgency = weekly leftover ÷ (time until weekly reset ÷ 5 hours × r)
+```
+
+Weekly leftover is a share of the account's weekly allowance. The plugin learns r from how the five-hour and weekly
+usage headers move together; until both have moved enough, it assumes 1/6. An account's urgency is 0 until it has
+reported its weekly reset, so the rule doesn't act on accounts the plugin hasn't heard from since it started.
+
+With r = 0.22 (a five-hour window of 110M units in a 500M-unit week, as the
+[replay](benchmarks.md#what-the-replay-does) assumes), and a warm account with half its week projected unused and six
+days to its reset:
+
+| Cold pick's projected leftover | Its weekly reset in | Its urgency | Warm account's | Difference | Decision |
+| ---: | --- | ---: | ---: | ---: | --- |
+| 50% | 6 days | 0.08 | 0.08 | 0.00 | Move to the warm account |
+| 50% | 2 days | 0.24 | 0.08 | 0.16 | Move to the warm account |
+| **50%** | **1 day** | **0.47** | **0.08** | **0.39** | **Keep the cold pick** |
+
+Half a week left with two days to go needs about a quarter of the account's fastest pace; with one day to go it needs
+about half, and that pick keeps the work. Before the plugin has learned r, with its assumed 1/6, the same urgencies
+are 0.10, 0.31 and 0.63, and the decisions are the same. The 0.3 threshold was chosen on the ten-day replay before any
+27-day run. Against keeping any cold pick whose urgency is at least 0.5, the ten-day replay doesn't favour it on
+quota; the 27-day replay favours it on work served ([benchmarks](benchmarks.md#alternatives-tested-and-rejected)).
+In the 27-day replay with tool search on the rule served more work only when the accounts ran short: 0.55–0.90% more
+at 0.7× to 0.9× the assumed allowances, and no robust gain at 1× ([benchmarks](benchmarks.md#expiring-allowance)).
 
 ## Accounts at their limit
 
