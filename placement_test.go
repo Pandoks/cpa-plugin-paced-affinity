@@ -278,6 +278,15 @@ func TestPlacement(t *testing.T) {
 				{at: 1, sid: "chat", auth: "a", quota: &placementQuota{usedW: .985, days: 3, weeklyOnly: true, credits: "False"}},
 				{at: 2, sid: "chat", candidates: "ab", want: "b"},
 			}},
+		// Codex keeps the chat's cache on a, so after three idle hours it returns there though b has used less of its week.
+		{"a Codex chat returns to its account after hours idle", "codex", []float64{20, 20},
+			[]placementQuota{{usedW: .4, days: 3, weeklyOnly: true}, {usedW: .3, days: 3, weeklyOnly: true}},
+			[]placementStep{
+				{sid: "chat", candidates: "a", want: "a"},
+				{at: 1, sid: "chat", auth: "a", quota: &placementQuota{usedW: .4, days: 3, weeklyOnly: true}},
+				{at: 3 * 3600, sid: "chat", candidates: "ab", want: "a"},
+				{at: 3*3600 + 1, sid: "fresh", candidates: "ab", want: "b"},
+			}},
 		{"a Claude chat stays on an account in its last 2% of the week", "claude", []float64{20, 20},
 			[]placementQuota{{used5: .1, usedW: .5, days: 3}, {used5: .1, usedW: .5, days: 3}},
 			[]placementStep{

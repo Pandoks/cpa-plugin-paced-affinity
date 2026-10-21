@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	affinityTTL    float64 = 60 // sliding: a warm chat is never moved voluntarily
+	affinityTTL    float64 = 60 // sliding: a warm chat is never moved voluntarily (Claude; Codex uses sessionTTL)
 	margin5h       float64 = 0.05
 	marginWeekly   float64 = 0.03
 	weeklyWeight   float64 = 2
@@ -34,6 +34,15 @@ func (s *session) rate(t float64) float64 {
 type binding struct {
 	acct  *account
 	lastT float64
+}
+
+// live reports whether the binding still holds its chat. A Claude chat's cache lasts an hour; Codex keeps a logged-in
+// user's cache indefinitely, so a Codex chat stays on its account as long as the plugin remembers the chat.
+func (b *binding) live(t float64) bool {
+	if b.acct.provider == "codex" {
+		return t-b.lastT <= sessionTTL
+	}
+	return t-b.lastT <= affinityTTL
 }
 
 type router struct {
@@ -86,7 +95,7 @@ func (r *router) pick(provider, model, sid, parent string, own bool, cands []plu
 	}
 	kind, key := sessionKey(sid, parent, own)
 	reason := "placed"
-	if b := r.bindings[key]; b != nil && t-b.lastT <= affinityTTL {
+	if b := r.bindings[key]; b != nil && b.live(t) {
 		if slices.Contains(cs, b.acct) && !b.acct.exhausted(t) && (!weeklyOnly || slices.Contains(usable(cs, t), b.acct)) {
 			return b.acct, "affinity"
 		}
@@ -341,7 +350,7 @@ func (r *router) sweep(t float64) {
 	}
 	r.swept = t
 	for k, b := range r.bindings {
-		if t-b.lastT > affinityTTL {
+		if !b.live(t) {
 			delete(r.bindings, k)
 		}
 	}

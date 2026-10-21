@@ -6,8 +6,12 @@ It uses signals already visible to CLIProxyAPI (CPA) and sends no requests of it
 
 ## How it picks an account
 
-A *binding* ties a chat to an account. It is live while it has been used within the last hour. For each request with
-a chat identity, the plugin takes these steps in order:
+A *binding* ties a chat to an account. A Claude binding is live while it has been used within the last hour, as long
+as Claude Code's cache lasts. A Codex binding is live while it has been used within the last 7 days, as long as the
+plugin remembers the chat: Codex keeps a logged-in user's prompt cache
+[indefinitely](https://x.com/thsottiaux/status/2112712984644784534), so a chat resumed hours later still reads its
+history from cache, but only on its own account ([benchmarks](benchmarks.md#codex-cache)). For each request with a
+chat identity, the plugin takes these steps in order:
 
 1. **Use a live binding.** A request whose binding is live goes to the bound account, unless that account is
    rate-limited or reports its limit reached, or, in a weekly-only Codex pool, is held while another account can take
@@ -239,9 +243,11 @@ expire in a day, and using it would take B's fastest pace for the whole day, whi
 [expiry urgency](#keeping-a-cold-pick-whose-allowance-is-expiring) (here with the assumed r = 1/6) leads A's by 0.94,
 at least 0.3, so B keeps the chat. Without that rule, A would get it.
 
-Codex is left out. It reports no cache writes, so whether it charges more for them is unknown, and in the replay a
-Codex warm rule spent more credits when the Codex accounts had room
-([benchmarks](benchmarks.md#alternatives-tested-and-rejected)).
+Codex is left out. It reports no cache writes, so whether it charges more for them is unknown, and Codex keeps
+a logged-in user's cache indefinitely, so an account that has ever served an opening still holds it. In the replay
+a Codex warm rule spent more credits, both with the old one-hour cache
+([benchmarks](benchmarks.md#alternatives-tested-and-rejected)) and with the indefinite one
+([benchmarks](benchmarks.md#codex-cache)).
 
 ### Keeping a cold pick whose allowance is expiring
 

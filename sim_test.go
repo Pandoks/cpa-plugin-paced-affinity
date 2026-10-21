@@ -30,7 +30,7 @@ import (
 const (
 	simWeek        = 7 * 86400.0
 	simFiveH       = 5 * 3600.0
-	ttlMain        = 3600.0 // Claude Code caches main chats for an hour, Codex and CPA's own breakpoints too
+	ttlMain        = 3600.0 // Claude Code caches main chats for an hour, and CPA's own breakpoints too
 	ttlSub         = 300.0  // and Claude Code subagents and workflow agents for five minutes
 	cpaAffinityTTL = 3600.0 // routing.session-affinity-ttl
 )
@@ -41,6 +41,7 @@ const (
 var (
 	meter      = [4]float64{0.05, 1.25, 2, 5}
 	codexMeter = [2]float64{0.1, 1}
+	codexTTL   = math.Inf(1) // SIM_CODEX_TTL: Codex keeps a logged-in user's cache indefinitely
 	openingHit = 1.0
 	modelMult  = map[string]float64{"opus": 1, "fable": 1, "sonnet": 0.6, "haiku": 0.2}
 	plans      = map[string][2]float64{"20x": {110, 500}, "5x": {27.5, 125}, "pro": {5.5, 25}} // units per 5h, week
@@ -123,6 +124,9 @@ func loadWork(t *testing.T, path string, deferred bool) []simRequest {
 		}
 		if k := r.kind(); k == "sub" || k == "wf" {
 			r.ttl = ttlSub
+		}
+		if r.provider == "codex" {
+			r.ttl = codexTTL
 		}
 		r.first = c[21] == "1"
 		r.toolSearch = deferred || c[19] == "" && !strings.Contains(r.class, "harness")
@@ -739,6 +743,9 @@ func TestSim(t *testing.T) {
 	var err error
 	if openingHit, err = strconv.ParseFloat(envOr("SIM_OPENING_HIT", "1"), 64); err != nil || openingHit < 0 || openingHit > 1 {
 		t.Fatalf("SIM_OPENING_HIT %q: want a fraction from 0 to 1", os.Getenv("SIM_OPENING_HIT"))
+	}
+	if codexTTL, err = strconv.ParseFloat(envOr("SIM_CODEX_TTL", "inf"), 64); err != nil || codexTTL <= 0 {
+		t.Fatalf("SIM_CODEX_TTL %q: want seconds, or inf", os.Getenv("SIM_CODEX_TTL"))
 	}
 	work := loadWork(t, path, openings == "deferred")
 	bgPath := os.Getenv("SIM_BG")
