@@ -30,7 +30,7 @@ import (
 const (
 	simWeek        = 7 * 86400.0
 	simFiveH       = 5 * 3600.0
-	ttlMain        = 3600.0 // Claude Code caches main chats for an hour, Codex and CPA's own breakpoints too
+	ttlMain        = 3600.0 // Claude Code caches main chats for an hour, and CPA's own breakpoints too
 	ttlSub         = 300.0  // and Claude Code subagents and workflow agents for five minutes
 	cpaAffinityTTL = 3600.0 // routing.session-affinity-ttl
 )
@@ -41,6 +41,7 @@ const (
 var (
 	meter      = [4]float64{0.05, 1.25, 2, 5}
 	codexMeter = [2]float64{0.1, 1}
+	codexTTL   = math.Inf(1) // SIM_CODEX_TTL: Codex keeps a logged-in user's cache indefinitely
 	openingHit = 1.0
 	modelMult  = map[string]float64{"opus": 1, "fable": 1, "sonnet": 0.6, "haiku": 0.2}
 	plans      = map[string][2]float64{"20x": {110, 500}, "5x": {27.5, 125}, "pro": {5.5, 25}} // units per 5h, week
@@ -124,6 +125,9 @@ func loadWork(t *testing.T, path string, deferred bool) []simRequest {
 		if k := r.kind(); k == "sub" || k == "wf" {
 			r.ttl = ttlSub
 		}
+		if r.provider == "codex" {
+			r.ttl = codexTTL
+		}
 		r.first = c[21] == "1"
 		r.toolSearch = deferred || c[19] == "" && !strings.Contains(r.class, "harness")
 		s, err := time.Parse(time.RFC3339Nano, c[11])
@@ -192,7 +196,10 @@ func (r *simRequest) addWrite(n int64) {
 	}
 }
 
-type cacheEntry struct{ from, until float64 }
+type cacheEntry struct {
+	from, until float64
+	tokens      int64 // a chat's own key: the context its last request on the account left cached (prompt and output)
+}
 
 func (c cacheEntry) warm(t float64) bool { return c.from <= t && t < c.until }
 
@@ -221,6 +228,9 @@ func (a *simAccount) touch(r *simRequest, key string) {
 		e.from = from
 	}
 	e.from, e.until = min(e.from, from), max(e.until, r.done+r.ttl)
+	if key == r.sid {
+		e.tokens = r.prompt() + r.input + r.out
+	}
 	a.cache[k] = e
 }
 
@@ -308,6 +318,7 @@ type sim struct {
 	bind      map[string]*simBinding // CPA's session affinity: session::model
 	rr        map[string]string      // round-robin: model -> last account picked
 	last      map[string]*simAccount // chat -> account of its previous request
+	lastDone  map[string]float64     // chat -> recorded completion of its previous request
 	pending   completions
 	m         map[string]*simMetrics // per provider
 	warmup    *simMetrics            // what requests before scoreFrom would have counted, discarded
@@ -334,7 +345,7 @@ func (s *sim) metrics(r *simRequest) *simMetrics {
 func newSim(t *testing.T, seed uint64, t0, scoreFrom float64, claude []string, claudeScale float64,
 	codexCap map[string]float64, windows map[string][]recordedWindow, weights bool, policy string) *sim {
 	s := &sim{accounts: map[string][]*simAccount{}, rng: rand.New(rand.NewPCG(seed, 7)), policy: policy,
-		bind: map[string]*simBinding{}, rr: map[string]string{}, last: map[string]*simAccount{}, m: map[string]*simMetrics{},
+		bind: map[string]*simBinding{}, rr: map[string]string{}, last: map[string]*simAccount{}, lastDone: map[string]float64{}, m: map[string]*simMetrics{},
 		warmup: newMetrics(""), bgm: map[string]*simMetrics{}, scoreFrom: scoreFrom}
 	for _, prov := range []string{"claude", "codex"} {
 		s.m[prov], s.bgm[prov] = newMetrics(prov), newMetrics(prov)
@@ -357,21 +368,28 @@ func newSim(t *testing.T, seed uint64, t0, scoreFrom float64, claude []string, c
 		s.accounts["claude"] = append(s.accounts["claude"], a)
 	}
 	for _, plan := range slices.Sorted(maps.Keys(windows)) {
-		ws := windows[plan]
-		a := &simAccount{id: "codex-" + plan, provider: "codex", capW: codexCap[plan], start5: -1, resetW: -1,
-			cache: map[string]cacheEntry{}}
-		if a.capW == 0 {
-			a.capW = 100
+		n, _ := strconv.Atoi(envOr("SIM_CODEX_SPLIT_"+plan, "1"))
+		for i := range n {
+			ws := windows[plan]
+			id := "codex-" + plan
+			if i > 0 {
+				id += fmt.Sprintf("#%d", i+1)
+			}
+			a := &simAccount{id: id, provider: "codex", capW: codexCap[plan] / float64(n), start5: -1, resetW: -1,
+				cache: map[string]cacheEntry{}}
+			if a.capW == 0 {
+				a.capW = 100
+			}
+			if weights {
+				a.weight = map[bool]float64{true: 24, false: 10}[plan == "pro"]
+			}
+			for len(ws) > 0 && ws[0].start <= t0 { // the window in force when the recording starts
+				a.usedW, a.resetW, a.credits = ws[0].used*a.capW, ws[0].start+simWeek, ws[0].credits
+				ws = ws[1:]
+			}
+			a.windows = ws
+			s.accounts["codex"] = append(s.accounts["codex"], a)
 		}
-		if weights {
-			a.weight = map[bool]float64{true: 24, false: 10}[plan == "pro"]
-		}
-		for len(ws) > 0 && ws[0].start <= t0 { // the window in force when the recording starts
-			a.usedW, a.resetW, a.credits = ws[0].used*a.capW, ws[0].start+simWeek, ws[0].credits
-			ws = ws[1:]
-		}
-		a.windows = ws
-		s.accounts["codex"] = append(s.accounts["codex"], a)
 	}
 	return s
 }
@@ -587,6 +605,19 @@ func (s *sim) serve(t *testing.T, r *simRequest) {
 			continue
 		}
 		read, cold := a.cacheRead(r)
+		if prev := s.last[r.sid]; prev != nil && a.warm(r, r.sid) {
+			// A chat reads at most the context it left cached on the account. Codex's recorded reads come from its old
+			// one-hour cache: a request more than an hour after its chat's previous one, whose history only grew
+			// since, reads all of that context instead.
+			left := a.cache[r.model+"|"+r.sid].tokens
+			if r.provider == "codex" && r.start-s.lastDone[r.sid] > ttlMain && r.prompt() >= left {
+				read = left
+			} else if prev != a {
+				read = min(read, left)
+			}
+			cold = none(read)
+		}
+		s.lastDone[r.sid] = r.done
 		for _, k := range []string{r.sid, r.opening, r.share} {
 			if k != "" {
 				a.touch(r, k)
@@ -739,6 +770,9 @@ func TestSim(t *testing.T) {
 	var err error
 	if openingHit, err = strconv.ParseFloat(envOr("SIM_OPENING_HIT", "1"), 64); err != nil || openingHit < 0 || openingHit > 1 {
 		t.Fatalf("SIM_OPENING_HIT %q: want a fraction from 0 to 1", os.Getenv("SIM_OPENING_HIT"))
+	}
+	if codexTTL, err = strconv.ParseFloat(envOr("SIM_CODEX_TTL", "inf"), 64); err != nil || codexTTL <= 0 {
+		t.Fatalf("SIM_CODEX_TTL %q: want seconds, or inf", os.Getenv("SIM_CODEX_TTL"))
 	}
 	work := loadWork(t, path, openings == "deferred")
 	bgPath := os.Getenv("SIM_BG")

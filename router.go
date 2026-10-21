@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	affinityTTL    float64 = 60 // sliding: a warm chat is never moved voluntarily
+	affinityTTL    float64 = 60 // sliding: a warm chat is never moved voluntarily (Claude; Codex uses sessionTTL)
 	margin5h       float64 = 0.05
 	marginWeekly   float64 = 0.03
 	weeklyWeight   float64 = 2
@@ -24,7 +24,8 @@ const (
 
 type session struct {
 	acct        *account
-	burn, burnT float64 // decayed units (rate = burn / tauSession)
+	burn, burnT float64           // decayed units (rate = burn / tauSession)
+	visited     map[*account]bool // Codex: accounts that served the chat
 }
 
 func (s *session) rate(t float64) float64 {
@@ -34,6 +35,15 @@ func (s *session) rate(t float64) float64 {
 type binding struct {
 	acct  *account
 	lastT float64
+}
+
+// live reports whether the binding still holds its chat. A Claude chat's cache lasts an hour; Codex keeps a logged-in
+// user's cache indefinitely, so a Codex chat stays on its account as long as the plugin remembers the chat.
+func (b *binding) live(t float64) bool {
+	if b.acct.provider == "codex" {
+		return t-b.lastT <= sessionTTL
+	}
+	return t-b.lastT <= affinityTTL
 }
 
 type router struct {
@@ -86,7 +96,7 @@ func (r *router) pick(provider, model, sid, parent string, own bool, cands []plu
 	}
 	kind, key := sessionKey(sid, parent, own)
 	reason := "placed"
-	if b := r.bindings[key]; b != nil && t-b.lastT <= affinityTTL {
+	if b := r.bindings[key]; b != nil && b.live(t) {
 		if slices.Contains(cs, b.acct) && !b.acct.exhausted(t) && (!weeklyOnly || slices.Contains(usable(cs, t), b.acct)) {
 			return b.acct, "affinity"
 		}
@@ -105,6 +115,16 @@ func (r *router) pick(provider, model, sid, parent string, own bool, cands []plu
 		choose = r.placeWeekly
 	}
 	a := choose(cs, t, burn)
+	// A Codex chat keeps its cache on every account it has been on, up to where it left each, so a chat that has to move
+	// goes back to one of those if one can take it, by the same rule.
+	if s := r.sessions[sid]; provider == "codex" && s != nil {
+		left := slices.DeleteFunc(slices.Clone(cs), func(v *account) bool {
+			return !s.visited[v] || v.exhausted(t) || weeklyOnly && v.held(t) || !weeklyOnly && !v.project(t, burn).fits()
+		})
+		if len(left) > 0 {
+			a = choose(left, t, burn)
+		}
+	}
 	// Codex windows often reset early, which only a request shows: now and then a new chat probes an account kept from
 	// new work, if it can take the request without a 429.
 	if weeklyOnly && kind == kindMain && r.sessions[sid] == nil {
@@ -315,8 +335,9 @@ func (r *router) observe(rec *pluginapi.UsageRecord, now float64) {
 	}
 
 	if s := r.sessions[sid]; s == nil {
-		r.sessions[sid] = &session{a, cost, t}
+		r.sessions[sid] = &session{a, cost, t, map[*account]bool{a: true}}
 	} else {
+		s.visited[a] = true
 		if kind == kindMain && s.acct != a {
 			delete(s.acct.active, sid)
 		}
@@ -341,7 +362,7 @@ func (r *router) sweep(t float64) {
 	}
 	r.swept = t
 	for k, b := range r.bindings {
-		if t-b.lastT > affinityTTL {
+		if !b.live(t) {
 			delete(r.bindings, k)
 		}
 	}
