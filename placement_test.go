@@ -287,6 +287,18 @@ func TestPlacement(t *testing.T) {
 				{at: 3 * 3600, sid: "chat", candidates: "ab", want: "a"},
 				{at: 3*3600 + 1, sid: "fresh", candidates: "ab", want: "b"},
 			}},
+		// The chat has been on a and b; b fills up, so it goes back to a, where its history is cached up to where it left,
+		// though c has used less of its week.
+		{"a Codex chat that has to move goes back to an account it has been on", "codex", []float64{20, 20, 20},
+			[]placementQuota{{usedW: .5, days: 3, weeklyOnly: true}, {usedW: .6, days: 3, weeklyOnly: true}, {usedW: .2, days: 3, weeklyOnly: true}},
+			[]placementStep{
+				{sid: "chat", candidates: "a", want: "a"},
+				{at: 1, sid: "chat", auth: "a", quota: &placementQuota{usedW: .5, days: 3, weeklyOnly: true}},
+				{at: 2, sid: "chat", candidates: "b", want: "b"},
+				{at: 3, sid: "chat", auth: "b", quota: &placementQuota{usedW: 1, days: 3, weeklyOnly: true}},
+				{at: 4, sid: "chat", candidates: "abc", want: "a"},
+				{at: 5, sid: "fresh", candidates: "abc", want: "c"},
+			}},
 		{"a Claude chat stays on an account in its last 2% of the week", "claude", []float64{20, 20},
 			[]placementQuota{{used5: .1, usedW: .5, days: 3}, {used5: .1, usedW: .5, days: 3}},
 			[]placementStep{

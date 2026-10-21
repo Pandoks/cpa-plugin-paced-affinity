@@ -15,7 +15,9 @@ chat identity, the plugin takes these steps in order:
 
 1. **Use a live binding.** A request whose binding is live goes to the bound account, unless that account is
    rate-limited or reports its limit reached, or, in a weekly-only Codex pool, is held while another account can take
-   the work ([weekly-only Codex accounts](#weekly-only-codex-accounts)). A main chat has its own binding. A chat's
+   the work ([weekly-only Codex accounts](#weekly-only-codex-accounts)). A Codex chat that has to move goes to an
+   account it has been on, if one can take it, chosen by step 3's rule: its history is still cached there up to
+   where it left. A main chat has its own binding. A chat's
    subagents, its *family*, share one binding separate from the chat's, or each has its own when Claude Code's tool
    search is on (see [subagents and forks](#subagents-and-forks)). A *fork*, a new chat started from a copy of another
    chat's history, shares its parent's binding. A better score elsewhere doesn't move a chat: on another account its

@@ -10,7 +10,8 @@ running on paid credits. It uses usage data CPA already receives, without extra 
 
 [How it works](docs/how-it-works.md) has the rules: warm chats stay put, new main chats are paced by weekly usage,
 and a chat's subagents stay together unless Claude Code's tool search (which defers MCP tools) is on. A Codex chat stays on
-its account for up to 7 days idle, since Codex now keeps a logged-in user's cache indefinitely. In Codex Pro and
+its account for up to 7 days idle, since Codex now keeps a logged-in user's cache indefinitely, and one that has to
+move goes back to an account it has been on if it can. In Codex Pro and
 ProLite pools, work goes to the account that has used the least of its week, and an account that reports no credits
 is held at 98% so a 429 doesn't lock it out past an early reset.
 

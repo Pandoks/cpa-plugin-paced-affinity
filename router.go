@@ -24,7 +24,8 @@ const (
 
 type session struct {
 	acct        *account
-	burn, burnT float64 // decayed units (rate = burn / tauSession)
+	burn, burnT float64           // decayed units (rate = burn / tauSession)
+	visited     map[*account]bool // Codex: accounts that served the chat
 }
 
 func (s *session) rate(t float64) float64 {
@@ -114,6 +115,16 @@ func (r *router) pick(provider, model, sid, parent string, own bool, cands []plu
 		choose = r.placeWeekly
 	}
 	a := choose(cs, t, burn)
+	// A Codex chat keeps its cache on every account it has been on, up to where it left each, so a chat that has to move
+	// goes back to one of those if one can take it, by the same rule.
+	if s := r.sessions[sid]; provider == "codex" && s != nil {
+		left := slices.DeleteFunc(slices.Clone(cs), func(v *account) bool {
+			return !s.visited[v] || v.exhausted(t) || weeklyOnly && v.held(t) || !weeklyOnly && !v.project(t, burn).fits()
+		})
+		if len(left) > 0 {
+			a = choose(left, t, burn)
+		}
+	}
 	// Codex windows often reset early, which only a request shows: now and then a new chat probes an account kept from
 	// new work, if it can take the request without a 429.
 	if weeklyOnly && kind == kindMain && r.sessions[sid] == nil {
@@ -324,8 +335,9 @@ func (r *router) observe(rec *pluginapi.UsageRecord, now float64) {
 	}
 
 	if s := r.sessions[sid]; s == nil {
-		r.sessions[sid] = &session{a, cost, t}
+		r.sessions[sid] = &session{a, cost, t, map[*account]bool{a: true}}
 	} else {
+		s.visited[a] = true
 		if kind == kindMain && s.acct != a {
 			delete(s.acct.active, sid)
 		}

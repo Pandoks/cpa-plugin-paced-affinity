@@ -196,7 +196,10 @@ func (r *simRequest) addWrite(n int64) {
 	}
 }
 
-type cacheEntry struct{ from, until float64 }
+type cacheEntry struct {
+	from, until float64
+	tokens      int64 // a chat's own key: the context its last request on the account left cached (prompt and output)
+}
 
 func (c cacheEntry) warm(t float64) bool { return c.from <= t && t < c.until }
 
@@ -225,6 +228,9 @@ func (a *simAccount) touch(r *simRequest, key string) {
 		e.from = from
 	}
 	e.from, e.until = min(e.from, from), max(e.until, r.done+r.ttl)
+	if key == r.sid {
+		e.tokens = r.prompt() + r.input + r.out
+	}
 	a.cache[k] = e
 }
 
@@ -361,21 +367,28 @@ func newSim(t *testing.T, seed uint64, t0, scoreFrom float64, claude []string, c
 		s.accounts["claude"] = append(s.accounts["claude"], a)
 	}
 	for _, plan := range slices.Sorted(maps.Keys(windows)) {
-		ws := windows[plan]
-		a := &simAccount{id: "codex-" + plan, provider: "codex", capW: codexCap[plan], start5: -1, resetW: -1,
-			cache: map[string]cacheEntry{}}
-		if a.capW == 0 {
-			a.capW = 100
+		n, _ := strconv.Atoi(envOr("SIM_CODEX_SPLIT_"+plan, "1"))
+		for i := range n {
+			ws := windows[plan]
+			id := "codex-" + plan
+			if i > 0 {
+				id += fmt.Sprintf("#%d", i+1)
+			}
+			a := &simAccount{id: id, provider: "codex", capW: codexCap[plan] / float64(n), start5: -1, resetW: -1,
+				cache: map[string]cacheEntry{}}
+			if a.capW == 0 {
+				a.capW = 100
+			}
+			if weights {
+				a.weight = map[bool]float64{true: 24, false: 10}[plan == "pro"]
+			}
+			for len(ws) > 0 && ws[0].start <= t0 { // the window in force when the recording starts
+				a.usedW, a.resetW, a.credits = ws[0].used*a.capW, ws[0].start+simWeek, ws[0].credits
+				ws = ws[1:]
+			}
+			a.windows = ws
+			s.accounts["codex"] = append(s.accounts["codex"], a)
 		}
-		if weights {
-			a.weight = map[bool]float64{true: 24, false: 10}[plan == "pro"]
-		}
-		for len(ws) > 0 && ws[0].start <= t0 { // the window in force when the recording starts
-			a.usedW, a.resetW, a.credits = ws[0].used*a.capW, ws[0].start+simWeek, ws[0].credits
-			ws = ws[1:]
-		}
-		a.windows = ws
-		s.accounts["codex"] = append(s.accounts["codex"], a)
 	}
 	return s
 }
@@ -591,6 +604,11 @@ func (s *sim) serve(t *testing.T, r *simRequest) {
 			continue
 		}
 		read, cold := a.cacheRead(r)
+		// a chat returning to an account reads only the context it left cached there
+		if prev := s.last[r.sid]; prev != nil && prev != a && a.warm(r, r.sid) {
+			read = min(read, a.cache[r.model+"|"+r.sid].tokens)
+			cold = none(read)
+		}
 		for _, k := range []string{r.sid, r.opening, r.share} {
 			if k != "" {
 				a.touch(r, k)
