@@ -318,6 +318,7 @@ type sim struct {
 	bind      map[string]*simBinding // CPA's session affinity: session::model
 	rr        map[string]string      // round-robin: model -> last account picked
 	last      map[string]*simAccount // chat -> account of its previous request
+	lastDone  map[string]float64     // chat -> recorded completion of its previous request
 	pending   completions
 	m         map[string]*simMetrics // per provider
 	warmup    *simMetrics            // what requests before scoreFrom would have counted, discarded
@@ -344,7 +345,7 @@ func (s *sim) metrics(r *simRequest) *simMetrics {
 func newSim(t *testing.T, seed uint64, t0, scoreFrom float64, claude []string, claudeScale float64,
 	codexCap map[string]float64, windows map[string][]recordedWindow, weights bool, policy string) *sim {
 	s := &sim{accounts: map[string][]*simAccount{}, rng: rand.New(rand.NewPCG(seed, 7)), policy: policy,
-		bind: map[string]*simBinding{}, rr: map[string]string{}, last: map[string]*simAccount{}, m: map[string]*simMetrics{},
+		bind: map[string]*simBinding{}, rr: map[string]string{}, last: map[string]*simAccount{}, lastDone: map[string]float64{}, m: map[string]*simMetrics{},
 		warmup: newMetrics(""), bgm: map[string]*simMetrics{}, scoreFrom: scoreFrom}
 	for _, prov := range []string{"claude", "codex"} {
 		s.m[prov], s.bgm[prov] = newMetrics(prov), newMetrics(prov)
@@ -604,11 +605,19 @@ func (s *sim) serve(t *testing.T, r *simRequest) {
 			continue
 		}
 		read, cold := a.cacheRead(r)
-		// a chat returning to an account reads only the context it left cached there
-		if prev := s.last[r.sid]; prev != nil && prev != a && a.warm(r, r.sid) {
-			read = min(read, a.cache[r.model+"|"+r.sid].tokens)
+		if prev := s.last[r.sid]; prev != nil && a.warm(r, r.sid) {
+			// A chat reads at most the context it left cached on the account. Codex's recorded reads come from its old
+			// one-hour cache: a request more than an hour after its chat's previous one, whose history only grew
+			// since, reads all of that context instead.
+			left := a.cache[r.model+"|"+r.sid].tokens
+			if r.provider == "codex" && r.start-s.lastDone[r.sid] > ttlMain && r.prompt() >= left {
+				read = left
+			} else if prev != a {
+				read = min(read, left)
+			}
 			cold = none(read)
 		}
+		s.lastDone[r.sid] = r.done
 		for _, k := range []string{r.sid, r.opening, r.share} {
 			if k != "" {
 				a.touch(r, k)

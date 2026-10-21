@@ -426,47 +426,52 @@ hasn't been on, and on one it has been on, only up to where it left. This versio
 
 Measured on a different recording from the tables above: everything extracted on the author's machine from 2026-10-04
 07:36 to 2026-10-21, 135,837 Codex requests in 13,905 chats, without the A/B harness's sessions, which weren't on that
-machine. The replay keeps Codex caches indefinitely (`SIM_CODEX_TTL`, default `inf`), and a chat returning to an
-account reads only the context it left cached there. Credits in millions of units, with warm chats moved in
-brackets; *before* is the previous version (one-hour Codex bindings):
+machine. The replay keeps Codex caches indefinitely (`SIM_CODEX_TTL`, default `inf`). A chat reads at most the
+context (prompt and output) it left cached on an account. The recorded reads come from the old one-hour cache, so a
+Codex request more than an hour after its chat's previous one, which as recorded mostly read nothing (106 of 140 read
+under 10% of their prompt), reads the whole context it left on that account. Credits in millions of units, with
+warm chats moved in brackets; *before* is the previous version (one-hour Codex bindings):
 
 | Codex capacity | Restart | Round-robin | Fill-first | Before | **This version** |
 | --- | --- | ---: | ---: | ---: | ---: |
-| 1× | none | 1,193.4 (26) | 1,441.9 (0) | 1,059.8 (108) | **1,060.1 (105)** |
-| 1.5× | none | 774.4 (36) | 1,066.1 (0) | 558.6 (88) | **558.8 (83)** |
-| 2× | none | 371.6 (44) | 732.2 (0) | 234.6 (73) | **234.8 (61)** |
-| 1× | 24 h | | | 1,079.9 (122) | **1,080.0 (121)** |
-| 1.5× | 24 h | | | 581.1 (140) | **580.8 (105)** |
-| 2× | 24 h | | | 260.9 (110) | **259.7 (76)** |
-| 1× | 6 h | | | 1,089.9 (174) | **1,076.4 (161)** |
-| 1.5× | 6 h | | | 590.0 (169) | **593.9 (160)** |
-| 2× | 6 h | | | 271.4 (174) | **269.5 (150)** |
+| 1× | none | 1,187.0 (26) | 1,434.2 (0) | 1,053.7 (112) | **1,053.1 (103)** |
+| 1.5× | none | 768.3 (36) | 1,059.0 (0) | 554.3 (89) | **553.9 (80)** |
+| 2× | none | 367.3 (43) | 726.5 (0) | 231.3 (65) | **229.4 (44)** |
+| 1× | 24 h | | | 1,073.4 (121) | **1,073.0 (120)** |
+| 1.5× | 24 h | | | 577.0 (129) | **576.3 (115)** |
+| 2× | 24 h | | | 257.5 (110) | **254.4 (71)** |
+| 1× | 6 h | | | 1,084.0 (176) | **1,070.0 (166)** |
+| 1.5× | 6 h | | | 592.8 (190) | **589.6 (158)** |
+| 2× | 6 h | | | 268.1 (181) | **265.8 (158)** |
 
-Measured: this version moves 1–31% fewer warm chats, with credits within 0.7% of before (1.2% fewer at 1× with
-6-hourly restarts) and Codex quota per unit of work within 0.05%; neither has Codex 429s except one each at 1× with
-6-hourly restarts. The reason is in the traffic: only 140 Codex requests start more than an hour after their chat's
-previous one, carrying 18M of the 14,382M prompt tokens, and before already sent most of them back to the same
-account. The cache change itself, with routing unchanged, cut Codex quota per unit of work by 0.18% at 1× (2,420.3M
-units with one-hour caches, 2,415.9M indefinite). Interactive use that resumes chats after hours would gain more than
-this mostly automated traffic; that wasn't replayed. A restart still forgets every binding and the accounts each chat
-has been on.
+Measured: this version pays fewer credits than before in all nine (0.04–1.3%), spends less Codex quota in eight and
+the same in one (at most 0.08% less), and moves 1–36% fewer warm chats. It has one Codex 429 at 1× with 6-hourly
+restarts, where before has none. The gain is small because only 140 Codex requests start more than an hour after
+their chat's previous one, carrying 18M of the 14,382M prompt tokens, and before already sent most of them back to the
+same account. The cache change itself, with routing unchanged, cut Codex quota per unit of work by 0.46% at 1×
+(2,420.3M units with one-hour caches, 2,409.2M indefinite). Interactive use that resumes chats after hours would gain
+more than this mostly automated traffic; that wasn't replayed. A restart still forgets every binding and the accounts
+each chat has been on.
 
 With two accounts, going back to an account the chat has been on changes nothing: a chat that must move has only the
-other account to go to. To test it with more, `SIM_CODEX_SPLIT_<plan>` splits each recorded account into several with
-the same windows and an equal share of its allowance. Against this version without that rule, change in Codex quota
-(millions of units) and credits:
+other account to go to. To test larger pools, `SIM_CODEX_SPLIT_<plan>` splits each recorded account into several with
+the same windows and an equal share of its allowance. Change in Codex quota / credits (millions of units), this
+version against before, and against this version without the go-back rule:
 
-| Accounts | Restart | 1× quota / credits | 1.5× | 2× |
-| --- | --- | --- | --- | --- |
-| 4 | none | −0.02 / 0.0 | −0.28 / −0.3 | −0.62 / −0.2 |
-| 4 | 24 h | −0.10 / 0.0 | −0.17 / +0.1 | −0.71 / −1.0 |
-| 6 | none | 0.00 / 0.0 | +0.06 / +0.3 | +0.27 / −0.2 |
-| 6 | 24 h | −0.48 / −0.4 | −0.37 / −0.3 | −0.92 / −0.1 |
+| Accounts | Restart | vs before, 1× | 1.5× | 2× | vs no go-back rule, 1× | 1.5× | 2× |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 4 | none | −1.5 / −0.9 | −0.8 / +0.1 | −2.6 / −1.4 | 0.0 / +0.1 | −0.4 / 0.0 | −1.0 / −0.6 |
+| 4 | 24 h | −0.2 / −7.4 | −1.1 / −4.0 | −2.3 / −3.4 | 0.0 / +0.3 | −1.6 / −1.3 | −2.8 / −0.5 |
+| 6 | none | −2.7 / −1.5 | −2.0 / −2.9 | −3.0 / −0.4 | −0.2 / 0.0 | −1.1 / −0.6 | +0.1 / −0.1 |
+| 6 | 24 h | −1.2 / −0.7 | −2.4 / −5.0 | −6.8 / −6.9 | −0.4 / −0.2 | −1.3 / −1.2 | −3.1 / −2.9 |
 
-Measured: it spends less quota in 9 of 12 cells, by at most 0.04%, and credits move by at most 1.0M either way.
-Taking the most recently left of those accounts, which holds the most of the chat's history, was neither consistently
-better nor worse: within 0.7M units either way. Split accounts share their windows, so they fill and reset together; accounts with their own
-windows may differ.
+Measured: against before, this version spends less quota in all twelve (at most 0.28%) and fewer credits in eleven
+(at most 2.6%). The go-back rule spends less quota in ten of twelve, the same in one and 0.07M more in one, saving at most 0.13%.
+Codex 429s: one for this version at 4 accounts, 1.5× with daily restarts, where without the go-back rule there are
+none; one without the rule at 6 accounts, 2× with daily restarts, where this version has none. In an earlier screen,
+going back to the account the chat left most recently, which holds the most of its history, was neither consistently
+better nor worse than this rule. Split accounts share their windows, so they fill and reset together; accounts with
+their own windows may differ.
 
 Also tested and rejected, with two accounts:
 
@@ -476,8 +481,8 @@ Also tested and rejected, with two accounts:
 | Also keep a live chat on an account paying credits | 1,223.7 / 802.0 / 493.2 | Rejected, as above |
 | Warm rule for Codex: a new chat prefers an account that has served its model | 1,092.3 / 592.8 / 273.3 (+3% / +6% / +16%) | Rejected: cold first requests unchanged (1,475 against 1,476), since every account soon holds every opening |
 
-Those were measured before the replay counted a returning chat's partial cache, against this version's 1,059.9 /
-558.7 / 234.8 then.
+Those were measured with an earlier replay that kept each request's recorded cache read, against this version's
+1,059.9 / 558.7 / 234.8 there.
 
 ### Sensitivity
 
@@ -627,8 +632,9 @@ replay sends) and usage records.
     it completes, if sooner) until its lifetime after it completes: an hour for Claude Code main chats, five minutes
     for subagents and workflow agents, and indefinitely for Codex (`SIM_CODEX_TTL`). The Codex tables before
     [Codex cache kept indefinitely](#codex-cache) were measured with an hour.
-  - A chat that returns to an account it left reads at most the context (prompt and output) its last request there
-    left cached.
+  - A chat reads at most the context (prompt and output) its last request on the account left cached. A Codex
+    request more than an hour after its chat's previous one reads all of it, since the recorded reads come from the
+    old one-hour cache.
   - A request whose own chat is warm on its account reads what it read in the recording. Otherwise it reads the
     largest warm prefix it shares with other chats and writes the rest.
   - Shared prefixes are the opening, shared by chats with the same client, version, model, kind of agent and MCP
