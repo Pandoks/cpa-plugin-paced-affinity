@@ -214,7 +214,7 @@ func (r *router) place(cands []*account, t, burn float64) *account {
 		switch {
 		case w.a.weeklyFirstUse && 0 <= w.a.rW && w.a.rW <= t:
 			pri = 10 // an expired first-use weekly window holds idle capacity; reopening it starts its clock
-		case w.a.has5h:
+		case w.a.has5h || w.a.provider == "claude":
 			pri = share(w.h, maxH) + lam*share(w.urgency, maxU)
 		default:
 			pri = share(w.urgency, maxU) // weekly-only: spend the allowance that would expire unused first
@@ -295,8 +295,8 @@ func (r *router) observe(rec *pluginapi.UsageRecord, now float64) {
 		return
 	}
 	w5, wW := quotaWindows(a.provider, rec.ResponseHeaders, now)
-	if w5.ok {
-		a.has5h = true // e.g. Codex Plus: 5h window plus weekly
+	if w5.ok || wW.ok {
+		a.has5h = w5.ok // e.g. Codex Plus: 5h window plus weekly; a verified Claude Ultra account reports weekly only
 	}
 	u5, r5, uW, rW := a.u5, a.r5, a.uW, a.rW // a missing header keeps the last observed value
 	if w5.ok {

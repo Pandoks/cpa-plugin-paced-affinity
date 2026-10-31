@@ -72,7 +72,7 @@ the management status endpoint (`/plugins/paced-affinity/status`) is removed.
 The plugin has no settings of its own; `enabled` and `priority` are CPA's. Keep `routing.session-affinity: true` so
 CPA's fallback routing stays sticky. Keep `model-level-cooling` false (CPA's default): the plugin relies on CPA benching the whole account after a usage-limit 429.
 
-Optionally, set each credential's CPA `weight` to its plan size (Claude Pro 1, Max 5x 5, Max 20x 20; Codex Pro 24,
+Optionally, set each credential's CPA `weight` to its plan size (Claude Pro 1, Max (formerly Max 5x) 5, Ultra (formerly Max 20x) 20; Codex Pro 24,
 Business ProLite 10). The plugin uses it only as a first guess at the account's size, until usage headers have moved
 enough to measure it. In the replay, plan weights helped Claude slightly after plugin restarts and changed Codex
 credits by more than 0.1% only at 2× Codex capacity: 31% more with the plugin kept running, 4% fewer with a daily

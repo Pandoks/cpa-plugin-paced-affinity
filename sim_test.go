@@ -352,12 +352,16 @@ func newSim(t *testing.T, seed uint64, t0, scoreFrom float64, claude []string, c
 	}
 	for i, plan := range claude {
 		plan, joined, _ := strings.Cut(plan, "@")
+		plan, weeklyOnly := strings.CutSuffix(plan, "-w") // e.g. 20x-w: a verified Ultra account, with no five-hour window
 		c, ok := plans[plan]
 		if !ok {
 			t.Fatalf("unknown Claude plan %q", plan)
 		}
 		a := &simAccount{id: fmt.Sprintf("claude-%d-%s", i, plan), provider: "claude", cap5: c[0] * claudeScale,
 			capW: c[1] * claudeScale, start5: -1, cache: map[string]cacheEntry{}}
+		if weeklyOnly {
+			a.cap5 = math.Inf(1)
+		}
 		if weights {
 			a.weight = map[string]float64{"20x": 20, "5x": 5, "pro": 1}[plan]
 		}
@@ -426,8 +430,10 @@ func (s *sim) headers(a *simAccount, t float64) http.Header {
 		if a.start5 >= 0 {
 			u5, r5 = a.used5/a.cap5, a.start5+simFiveH
 		}
-		h.Set("Anthropic-Ratelimit-Unified-5h-Utilization", f(math.Round(u5*100)/100))
-		h.Set("Anthropic-Ratelimit-Unified-5h-Reset", f(math.Floor(r5)))
+		if !math.IsInf(a.cap5, 1) {
+			h.Set("Anthropic-Ratelimit-Unified-5h-Utilization", f(math.Round(u5*100)/100))
+			h.Set("Anthropic-Ratelimit-Unified-5h-Reset", f(math.Floor(r5)))
+		}
 		h.Set("Anthropic-Ratelimit-Unified-7d-Utilization", f(math.Round(a.usedW/a.capW*100)/100))
 		h.Set("Anthropic-Ratelimit-Unified-7d-Reset", f(math.Floor(a.resetW)))
 		return h
