@@ -322,6 +322,30 @@ the estimated Codex capacity this version paid 941.8M units in credits over the 
 (1,067.9M), 29% fewer than fill-first (1,323.5M) and 14% fewer than v0.1.1 (1,097.7M). Before the
 [weekly-only Codex rule](#codex) it paid 1,096.7M, 2.7% more than round-robin; [Codex](#codex) traces why.
 
+### Weekly-only Claude accounts
+
+Anthropic removed the five-hour limit for verified Ultra accounts (formerly Max 20x) on 2026-10-30. This replay makes
+every Claude account weekly-only (`SIM_PLANS=20x-w,5x-w,5x-w@2026-10-05T17:58:54Z,20x-w`), keeping each plan's weekly
+allowance, on the local recording of 2026-10-15 to 2026-10-30 (about 3,800 requests) plus its background
+(`SIM_BG=testdata/work.tsv.bg`, 180,840 requests at the default `SIM_BG_SCALE`), 20 seeds per cell. Changes are this
+version less the built-in policy, with 95% paired intervals; `*` marks those that exclude 0.
+
+| Capacity | Against | Requests unserved | Weekly allowance expired (M units) | Quota per unit of work |
+| --- | --- | ---: | ---: | ---: |
+| 0.5× | Round-robin | −8,913 ±1,757* | −70 ±14* | −0.12% ±0.21 |
+| 0.5× | Fill-first | −12,257 ±4,001* | −97 ±31* | +0.05% ±0.13 |
+| 0.7× | Round-robin | −1,930 ±1,634* | −107 ±21* | −0.17% ±0.06* |
+| 0.7× | Fill-first | −1,825 ±1,936 | −150 ±34* | −0.03% ±0.04 |
+| 1× | Round-robin | 0 | −179 ±30* | −0.16% ±0.01* |
+| 1× | Fill-first | 0 | −282 ±65* | 0.00% |
+| 2× | Round-robin | 0 | −264 ±60* | −0.19% ±0.01* |
+| 2× | Fill-first | 0 | −332 ±110* | 0.00% |
+
+No cell is significantly worse than either built-in policy. Quota per unit of work counts only the recorded requests;
+the unserved counts are mostly background. In a pool of Ultra, Max, Max and Ultra (only the Ultras weekly-only) at
+0.5×, 0.7× and 1× over 12 seeds, the version before this change, this one, and a variant that spreads an Ultra
+account's remaining week evenly over five-hour spans had no significant difference in requests unserved.
+
 ### Codex
 
 Units of Codex usage paid with credits. With the plugin kept running, this version pays the fewest at every capacity
@@ -742,7 +766,7 @@ The replay's settings:
 | `SIM_SEEDS` | `1` | Replays, each with its own weekly phases and starting usage |
 | `SIM_SEED_FROM` | `1` | The first seed, e.g. `101` for seeds outside the 1–16 used to screen rules |
 | `SIM_CLAUDE_SCALE` | `1` | Claude capacity, a multiple of the plan allowances |
-| `SIM_PLANS` | `20x,5x,5x@2026-10-05T17:58:54Z,20x` | Claude plans in CPA's candidate order; `plan@time` joins then |
+| `SIM_PLANS` | `20x,5x,5x@2026-10-05T17:58:54Z,20x` | Claude plans in CPA's candidate order; `plan@time` joins then; `plan-w` has no five-hour window, as a verified Ultra account |
 | `SIM_CODEX_CAPS` | `pro=140,self_serve_business_prolite=75` | Codex weekly capacity per plan, in millions of units |
 | `SIM_OPENINGS` | `recorded` | `recorded`, or `deferred` to replay the chats before tool search with their MCP tools deferred (and Claude Code's tool-search header) |
 | `SIM_OPENING_HIT` | `1` | The chance a Claude Code main chat whose own cache is cold reads a warm opening, counted as an expected value |

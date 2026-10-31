@@ -126,6 +126,17 @@ func TestPlacement(t *testing.T) {
 		{"allowance about to expire outweighs five-hour room under weekly pressure", "codex", []float64{20, 20},
 			[]placementQuota{{used5: .6, usedW: .75, days: .5}, {used5: .1, usedW: .75, days: 6}},
 			[]placementStep{{sid: "fresh", candidates: "ab", want: "a"}}},
+		// Ultra (weight 1, as without a CPA weight) has 0.9 * 45 = 40.5 units of week left and no five-hour window; Max 5x
+		// has 0.9 * 37.5 = 33.75 units of five-hour room. Once a's five-hour window is back and nearly used, b has the room.
+		{"a Claude account without a five-hour window is limited by its week alone", "claude", []float64{1, 5},
+			[]placementQuota{{usedW: .1, days: 3, weeklyOnly: true}, {used5: .1, usedW: .1, days: 3}},
+			[]placementStep{
+				{sid: "history", auth: "b", quota: &placementQuota{used5: .1, usedW: .1, days: 3}},
+				{at: 1, sid: "history", candidates: "ab", want: "a"},
+				{at: 2, sid: "history", auth: "a", quota: &placementQuota{used5: .9, usedW: .1, days: 3}},
+				{at: 3, sid: "history2", auth: "b", quota: &placementQuota{used5: .1, usedW: .1, days: 3}},
+				{at: 4, sid: "history2", candidates: "ab", want: "b"},
+			}},
 		{"a new chat goes where its model's prompt prefix is cached", "claude", []float64{20, 20},
 			[]placementQuota{{used5: .1, usedW: .7, days: 6}, {used5: .1, usedW: .8, days: 1}},
 			[]placementStep{
@@ -587,8 +598,10 @@ func placementObserve(t *testing.T, p *router, provider string, s placementStep)
 	f := func(x float64) string { return strconv.FormatFloat(x, 'f', -1, 64) }
 	h := http.Header{}
 	if provider == "claude" {
-		h.Set("Anthropic-Ratelimit-Unified-5h-Utilization", f(q.used5))
-		h.Set("Anthropic-Ratelimit-Unified-5h-Reset", f(reset5))
+		if !q.weeklyOnly {
+			h.Set("Anthropic-Ratelimit-Unified-5h-Utilization", f(q.used5))
+			h.Set("Anthropic-Ratelimit-Unified-5h-Reset", f(reset5))
+		}
 		if !q.noWeekly {
 			h.Set("Anthropic-Ratelimit-Unified-7d-Utilization", f(q.usedW))
 			h.Set("Anthropic-Ratelimit-Unified-7d-Reset", f(placementNow+86400*q.days))

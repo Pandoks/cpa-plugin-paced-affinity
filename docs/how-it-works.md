@@ -125,10 +125,12 @@ margins, estimate how much allowance would remain at its next reset if its recen
 projected room = remaining allowance − recent burn rate × time until reset
 ```
 
-Room is measured in absolute capacity units, learned from how usage headers move as tokens are served, so a Max 20x
-account counts as about four times a Max 5x account at equal utilization. An account whose five-hour window has closed
+Room is measured in absolute capacity units, learned from how usage headers move as tokens are served, so an Ultra
+account counts as about four times a Max account at equal utilization. An account whose five-hour window has closed
 is treated as opening a fresh one: for Claude, a window that started at the top of the current hour. Weekly allowance
-also caps room using a five-hour look-ahead: a fresh short window does not make an almost exhausted week usable. A
+also caps room using a five-hour look-ahead: a fresh short window does not make an almost exhausted week usable. An
+account whose latest response reports a weekly window but no five-hour one, such as a verified Ultra account, is
+limited by its week alone until a five-hour window shows up again. A
 credential's CPA `weight` seeds the capacity estimate until headers have moved enough to measure it.
 
 ### Adding weekly urgency
