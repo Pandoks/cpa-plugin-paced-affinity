@@ -44,6 +44,7 @@ import "C"
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -142,7 +143,7 @@ func registration() map[string]any {
 		"schema_version": pluginabi.SchemaVersion,
 		"metadata": pluginapi.Metadata{
 			Name:             "paced-affinity",
-			Version:          version,
+			Version:          strings.TrimPrefix(version, "v"), // the panel prefixes its own "v"
 			Author:           "Pandoks",
 			GitHubRepository: "https://github.com/Pandoks/cpa-plugin-paced-affinity",
 		},
