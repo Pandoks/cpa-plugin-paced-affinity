@@ -26,10 +26,12 @@ type profile struct {
 
 // Claude: weight 1 = Pro (Max 5x = 5, Max 20x = 20), ~$30 of Opus per 5h, weekly ~6 windows.
 // Codex: Pro = 24, Business ProLite = 10, ~$60 of GPT per week per unit; weekly-only until a 5h window is seen.
-// Priors only: each account's real scale is learned from its rate-limit headers.
+// Antigravity: weight 1 = Pro (Ultra $100 = 5, $200 = 20), per allowance; unmeasured, so Claude's capacities stand in.
+// Priors only: each account's real scale is learned from its rate-limit headers or polled quota.
 var profiles = map[string]profile{
-	"claude": {cap5: 7.5, capW: 45, tokenWeights: [4]float64{0.05, 2, 1.25, 5}, has5h: true, hourAnchor: true},
-	"codex":  {cap5: 1, capW: 6, tokenWeights: [4]float64{0.1, 1, 1, 5}, weeklyFirstUse: true},
+	"claude":      {cap5: 7.5, capW: 45, tokenWeights: [4]float64{0.05, 2, 1.25, 5}, has5h: true, hourAnchor: true},
+	"codex":       {cap5: 1, capW: 6, tokenWeights: [4]float64{0.1, 1, 1, 5}, weeklyFirstUse: true},
+	"antigravity": {cap5: 7.5, capW: 45, tokenWeights: [4]float64{0.05, 1, 1, 5}, has5h: true, weeklyFirstUse: true},
 }
 
 type account struct {
@@ -40,6 +42,7 @@ type account struct {
 	tObs           float64
 	credits        int     // Codex: 1 if it reports credits to pay with past its limits, -1 if it reports none, 0 until reported
 	probeT         float64 // Codex: when a new chat last probed it, or it was picked before it was first heard from
+	pending        float64 // Antigravity: units served since its quota was last polled
 
 	acc5, accWShort, accWLong, accT float64 // exponentially decayed utilization deltas (burn rates)
 	sumDu5, sumW5, sumDuW, sumWW    float64 // online calibration: utilization deltas vs assumed units
@@ -100,6 +103,41 @@ func (a *account) held(t float64) bool {
 // still serves after each plugin restart, before every account has answered.
 func (a *account) probeable(t float64) bool {
 	return a.exhausted(t) && a.credits > 0 || a.held(t) && a.uW < 1-creditReserve/2
+}
+
+// record takes observed windows at t, setting their movement against the units served since the last observation. A
+// window not observed keeps its last value; the first observation (e.g. after a restart mid-window) only records.
+func (a *account) record(w5, wW window, cost, t float64) {
+	if w5.ok || wW.ok {
+		a.has5h = w5.ok // e.g. Codex Plus: 5h window plus weekly; a verified Claude Ultra account reports weekly only
+	}
+	u5, r5, uW, rW := a.u5, a.r5, a.uW, a.rW
+	if w5.ok {
+		u5, r5 = w5.util, w5.reset
+	}
+	if wW.ok {
+		uW, rW = wW.util, wW.reset
+	}
+	var d5, dW float64
+	if a.tObs >= 0 {
+		d5, dW = u5, uW // a new window counts from zero
+		if r5 == a.r5 {
+			d5 = u5 - a.u5
+		}
+		if rW == a.rW {
+			dW = uW - a.uW
+		}
+		d5, dW = max(d5, 0), max(dW, 0)
+		a.sumDu5 += d5
+		a.sumW5 += cost
+		a.sumDuW += dW
+		a.sumWW += cost
+	}
+	a.decay(t)
+	a.acc5 += d5
+	a.accWShort += dW
+	a.accWLong += dW
+	a.u5, a.r5, a.uW, a.rW, a.tObs = u5, r5, uW, rW, t
 }
 
 func (a *account) decay(t float64) {

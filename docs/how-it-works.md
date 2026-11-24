@@ -2,7 +2,8 @@
 
 **Paced Affinity** chooses which subscription account serves a request. It aims to get more work out of the same
 accounts by reading prompt caches instead of rewriting them, and by assigning new work where allowance is available.
-It uses signals already visible to CLIProxyAPI (CPA) and sends no requests of its own.
+For Claude and Codex it uses signals already visible to CLIProxyAPI (CPA) and sends no requests of its own; for
+Antigravity it polls Google's quota endpoint ([Antigravity](#antigravity)).
 
 ## How it picks an account
 
@@ -66,6 +67,9 @@ one, CPA gives it `codex:<thread>` with a parent, and the plugin treats it like 
 binding. A nested Codex subagent joins the root chat's family only if Codex sends the root's session ID; the plugin
 assumes it does, and so does the replay.
 
+An Antigravity CLI subagent arrives as `agy:<session>` with its parent's ID and no agent ID, so the plugin treats it
+like a fork: it follows its parent's binding, on the chat's own account.
+
 How a family's Claude subagents are bound depends on Claude Code's tool search (`ENABLE_TOOL_SEARCH=true`, which
 defers MCP tools instead of sending them in full):
 
@@ -117,21 +121,22 @@ has more unused allowance but is early in its week.
 
 ## Projected placement
 
-Claude's resumed chats (including their retries after a 429), subagents and forks use this rule, and so does Codex work
-in pools with a five-hour window or with an account not yet heard from. For each account that passes the projected
-margins, estimate how much allowance would remain at its next reset if its recent burn rate continued:
+Claude's resumed chats (including their retries after a 429), subagents and forks use this rule, and so do all
+Antigravity work and Codex work in pools with a five-hour window or with an account not yet heard from. For each
+account that passes the projected margins, estimate how much allowance would remain at its next reset if its recent
+burn rate continued:
 
 ```text
 projected room = remaining allowance − recent burn rate × time until reset
 ```
 
-Room is measured in absolute capacity units, learned from how usage headers move as tokens are served, so an Ultra
+Room is measured in absolute capacity units, learned from how reported usage moves as tokens are served, so an Ultra
 account counts as about four times a Max account at equal utilization. An account whose five-hour window has closed
 is treated as opening a fresh one: for Claude, a window that started at the top of the current hour. Weekly allowance
 also caps room using a five-hour look-ahead: a fresh short window does not make an almost exhausted week usable. An
 account whose latest response reports a weekly window but no five-hour one, such as a verified Ultra account, is
 limited by its week alone until a five-hour window shows up again. A
-credential's CPA `weight` seeds the capacity estimate until headers have moved enough to measure it.
+credential's CPA `weight` seeds the capacity estimate until headers or polled quota have moved enough to measure it.
 
 ### Adding weekly urgency
 
@@ -290,14 +295,86 @@ at 0.7× to 0.9× the assumed allowances, and no robust gain at 1× ([benchmarks
 
 ## Accounts at their limit
 
-With CPA's default `model-level-cooling: false`, after a 429 CPA itself benches the account until its reset, so the plugin never sees it. An account can also report
-100% usage on a successful response. A Codex account with credits keeps answering past its limit and charges the
-credits. The plugin treats any account that reports 100% as exhausted until its window resets: it gets no new work and
-warm chats leave it, while another candidate has room. In a weekly-only Codex pool, an account that reports no
-credits is held from 98% instead, so it normally doesn't reach the 429 ([above](#weekly-only-codex-accounts)).
+With CPA's default `model-level-cooling: false`, after a Claude or Codex 429 CPA itself benches the account until its
+reset, so the plugin never sees it; an Antigravity 429 benches only one model ([Antigravity](#antigravity)). An
+account can also report 100% usage on a successful response. A Codex account with credits keeps answering past its
+limit and charges the credits. The plugin treats any account that reports 100% as exhausted until its window
+resets: it gets no new work and warm chats leave it, while another candidate has room. In a weekly-only Codex pool, an
+account that reports no credits is held from 98% instead, so it normally doesn't reach the 429
+([above](#weekly-only-codex-accounts)).
 After each plugin restart a held account still serves requests until every account has answered, usually one or two
 ([start-up](#codex-start-up)), so restarts every few hours can use up the reserve and reach one
 ([benchmarks](benchmarks.md#codex-restarts)).
+
+## Antigravity
+
+Antigravity answers carry no quota. The plugin reads it from `retrieveUserQuotaSummary`, the endpoint the official
+Antigravity CLI reads, sending the request through CPA to the auth file's `base_url` if set, else
+`https://daily-cloudcode-pa.googleapis.com`, with the account's access token and project ID from that file. It always
+sends the `User-Agent` the official CLI 1.5.16 sent on this call from Linux, not the
+`antigravity/hub/<version> <platform>` one CPA sends by default on the account's own requests. CPA renews the file's
+token about 30 minutes before it expires; the plugin only reads it, for each poll. An account is polled in the
+background, so a pick uses what is already known:
+
+- once it has served a request since its last poll, if that poll was sent at least a minute ago;
+- when it is a candidate and its last poll was sent at least 5 minutes ago, or it has never been polled;
+- after a 429, if the last poll was sent at least 10 seconds ago.
+
+No requests, no polls, and never two polls of an account at once. A poll that fails or can't be read leaves the
+account's quota as it was, and the next trigger tries again; the timers run from the last poll sent, so a failed poll
+waits them out too. An account whose first poll hasn't returned, as on its first request after a start, is routed as
+unused at its first-guess size (see **Capacity**) until that poll returns. How often the official CLI polls was not
+measured.
+
+**Accounts it can't read.** An account is blind when its latest poll failed and it had no successful poll in the 15
+minutes before that, or none ever. An account whose auth file sets its own `proxy_url` is never polled, because the HTTP
+call CPA offers plugins goes out through CPA's global `proxy-url` (if none is set, through any `HTTPS_PROXY` in CPA's
+environment), never an account's own, and the plugin won't send an account's token from a different address than its
+requests use; nor is one whose auth file has no `project_id`, since a quota request without a project is
+[reported](https://github.com/pingdotgg/t3code/issues/40405) to return only the Claude and GPT allowance. Either is
+blind once its first poll attempt finishes. An account without quota data looks unused and would take every new chat, so
+while any candidate of an Antigravity request is blind, the plugin leaves that request to CPA's built-in routing. It
+keeps trying polls on later requests and takes over again after a poll succeeds; a chat CPA placed meanwhile stays on
+the account that served it, which the plugin learns from usage records. Failed polls and these hand-backs are logged at
+debug level.
+
+**Two allowances.** Each account has one allowance for Gemini models and one for Claude and GPT models
+([usage](https://antigravity.google/docs/cli/commands/usage)), each with a five-hour and a weekly window on Pro and
+Ultra; Free and Plus have the weekly one only ([plans](https://antigravity.google/docs/plans)). The plugin treats each
+allowance as an account of its own: a model whose name, as the client requested it and after any CPA `prefix/`, starts
+with `gemini` draws on the Gemini allowance, and any other model counts toward the Claude and GPT one. A chat's requests
+to each allowance have their own binding, so a chat that uses both doesn't move back and forth. A window the reply gives
+no reset for, as for an allowance not used yet, is taken to open on its next request (inferred from the reply, not
+documented): it counts as unused, and an account whose weekly window hasn't opened gets new work first, as a Codex
+account whose weekly window has expired does. Usage lands on the wrong allowance when the name the client requested
+doesn't show which group serves it: an `oauth-model-alias`, `auto` or a model-router plugin that sends a name not
+starting with `gemini` to a Gemini model, or the reverse; and any model in Google's Gemini group whose name doesn't
+start with `gemini`. The reply lists that group's models by display name, including Orchestrator models alongside the
+Gemini ones, and their model names weren't checked.
+
+**What applies.** New work uses [projected placement](#projected-placement) and the [margins](#margins), and a binding
+stays live while used within the hour, as Claude's does. An allowance whose poll shows no five-hour window (Free,
+Plus) is ranked by [weekly urgency](#adding-weekly-urgency) alone: its weekly allowance projected to expire unused,
+divided by the time left. Claude's weekly pacing of new main chats, warm-cache rule and tool-search rule for subagents
+don't apply, nor do Codex's credits, holds, probes, 7-day bindings and return to accounts a chat has been on. Whether
+a new chat reads another chat's cached prefix through Antigravity, and whether Claude models are cached there at all,
+is unknown. AI credit overages aren't tracked: the plugin reads only the baseline quota, so an allowance whose
+baseline is used up is kept off while another candidate has room, whether or not the account would go on with
+[credits](https://antigravity.google/docs/plans#overages). Antigravity is not benchmarked: the [replay](benchmarks.md)
+covers Claude and Codex only.
+
+**Capacity.** Google's quota reply says quota is consumed in proportion to the cost of the tokens, and Google draws
+Gemini quota down by API pricing ([blog](https://antigravity.google/blog/changes-to-antigravity-plans)). The plugin's
+weights are assumed, not measured: a cached input token at 0.05, an uncached one at 1 and an output token, thinking
+included, at 5, with no factor per model, so the size it learns shifts when the mix of models changes. Its first
+guess at each allowance's size per unit of CPA `weight` is Claude's, which is unmeasured for Antigravity; as for the
+other providers, the plugin then learns the size from how the polled usage moves against the tokens served between
+polls.
+
+**At its limit.** After a 429 CPA benches only the model that got it, on that account, so the account stays a
+candidate for that allowance's other models. Once a poll (including the one the 429 triggers) shows either of the
+allowance's windows used up, the plugin keeps new work and live chats off it while another candidate has room; until
+then the other models stay where they were.
 
 ## Signals it uses
 
@@ -306,8 +383,9 @@ After each plugin restart a held account still serves requests until every accou
 | `anthropic-ratelimit-unified-5h` / `7d` utilization and reset headers | Observe Claude window usage and reset times |
 | `x-codex-primary` / `secondary` used-percent, window-minutes, reset-at headers | Identify Codex windows and observe usage |
 | `x-codex-credits-has-credits` header | Tell which weekly-only Codex accounts pay with credits: those aren't held short of their limit, and are preferred and probed past it |
-| Token usage in responses; the model the client requested | Estimate burn and capacity; remember which accounts hold each model's prompt prefix |
-| Claude Code and Codex session and agent IDs | Track bindings: a chat's, its subagents', and a fork's on its parent's |
+| Antigravity `retrieveUserQuotaSummary` buckets: remaining fraction and reset of each window | Observe each Antigravity allowance's usage |
+| Token usage in responses; the model the client requested | Estimate burn and capacity; remember which accounts hold each model's prompt prefix; tell an Antigravity request's allowance |
+| Claude Code and Codex session and agent IDs; Antigravity CLI session and parent IDs | Track bindings: a chat's, its subagents', and a fork's on its parent's |
 | `Anthropic-Beta` request header (`advanced-tool-use-`) | Tell whether Claude Code's tool search is on, which decides how Claude subagents are bound |
 
 > [!NOTE]
@@ -316,6 +394,7 @@ After each plugin restart a held account still serves requests until every accou
 
 ## Fallback
 
-Missing headers leave less information for the estimates. Errors, panics, unknown providers and requests without a
-chat identity fall back to CPA's built-in selector; keep `routing.session-affinity: true` so that fallback routing
-stays sticky. The plugin logs each decision at debug level.
+Missing headers leave less information for the estimates. Errors, panics, unknown providers, picks whose candidates span
+providers, Antigravity picks with a candidate whose quota can't be read ([Antigravity](#antigravity)) and requests
+without a chat identity fall back to CPA's built-in selector; keep `routing.session-affinity: true` so that fallback
+routing stays sticky. The plugin logs each decision at debug level.

@@ -32,11 +32,13 @@ static const cliproxy_host_api* host_api;
 
 static void set_host_api(const cliproxy_host_api* host) { host_api = host; }
 
-static void call_host(const char* method, const uint8_t* req, size_t len) {
-	if (host_api == NULL || host_api->call == NULL) return;
-	cliproxy_buffer resp = {0, 0};
-	host_api->call(host_api->host_ctx, method, req, len, &resp);
-	if (resp.ptr != NULL && host_api->free_buffer != NULL) host_api->free_buffer(resp.ptr, resp.len);
+static int call_host(const char* method, const uint8_t* req, size_t len, cliproxy_buffer* resp) {
+	if (host_api == NULL || host_api->call == NULL) return 1;
+	return host_api->call(host_api->host_ctx, method, req, len, resp);
+}
+
+static void free_host(cliproxy_buffer resp) {
+	if (resp.ptr != NULL && host_api != NULL && host_api->free_buffer != NULL) host_api->free_buffer(resp.ptr, resp.len);
 }
 */
 import "C"
@@ -85,8 +87,10 @@ func cliproxyPluginCall(method *C.char, req *C.uint8_t, n C.size_t, resp *C.clip
 //export cliproxyPluginFree
 func cliproxyPluginFree(ptr unsafe.Pointer, _ C.size_t) { C.free(ptr) }
 
+// CPA cancels the plugin's host requests before this call and frees the host API after it, so polls must end first.
+//
 //export cliproxyPluginShutdown
-func cliproxyPluginShutdown() {}
+func cliproxyPluginShutdown() { global.fetching.Wait() }
 
 // dispatch serves one ABI call at unix time now (seconds). It never panics, and a pick that fails for any
 // reason is answered "not handled", so the built-in selector (and its session affinity) routes instead.
@@ -134,6 +138,10 @@ func (r *router) handlePick(raw []byte, now float64) pluginapi.SchedulerPickResp
 	own := provider == "claude" && toolSearch(req.Options.Headers)
 	a, reason := r.pick(provider, model, sid, parent, own, req.Candidates, now/60)
 	// CPA's log formatter drops unknown fields, so the decision goes into the message.
+	if a == nil {
+		hostLog("debug", fmt.Sprintf("paced-affinity: %s -> CPA (no quota for %s)", sid, reason))
+		return pluginapi.SchedulerPickResponse{}
+	}
 	hostLog("debug", fmt.Sprintf("paced-affinity: %s -> %s (%s of %d)", sid, a.id, reason, len(req.Candidates)))
 	return pluginapi.SchedulerPickResponse{AuthID: a.id, Handled: true}
 }
@@ -165,10 +173,36 @@ func envelope(result any, err error) []byte {
 }
 
 func hostLog(level, msg string) {
-	raw, _ := json.Marshal(map[string]string{"level": level, "message": msg})
-	method := C.CString(pluginabi.MethodHostLog)
-	defer C.free(unsafe.Pointer(method))
-	req := C.CBytes(raw)
-	defer C.free(req)
-	C.call_host(method, (*C.uint8_t)(req), C.size_t(len(raw)))
+	host(pluginabi.MethodHostLog, map[string]string{"level": level, "message": msg}, nil)
+}
+
+func host(method string, req, out any) error {
+	raw, _ := json.Marshal(req)
+	res, err := hostCall(method, raw)
+	if err != nil || out == nil {
+		return err
+	}
+	return json.Unmarshal(res, out)
+}
+
+// hostCall sends one callback to the host from any goroutine and returns its result; tests stand in for the host.
+var hostCall = func(method string, req []byte) ([]byte, error) {
+	m := C.CString(method)
+	defer C.free(unsafe.Pointer(m))
+	p := C.CBytes(req)
+	defer C.free(p)
+	var resp C.cliproxy_buffer
+	if C.call_host(m, (*C.uint8_t)(p), C.size_t(len(req)), &resp) != 0 {
+		return nil, fmt.Errorf("host call %s failed", method)
+	}
+	raw := C.GoBytes(resp.ptr, C.int(resp.len))
+	C.free_host(resp)
+	var env pluginabi.Envelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, err
+	}
+	if !env.OK {
+		return nil, env.Error
+	}
+	return env.Result, nil
 }

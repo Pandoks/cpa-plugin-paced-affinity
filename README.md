@@ -2,11 +2,12 @@
 
 ## What it does
 
-A [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) plugin that routes Claude and Codex chats across
-your subscription accounts. It keeps CPA's session affinity and adds quota and cache awareness: new chats go where
-their prompt is already cached and allowance is available, unless another account's weekly allowance is expiring
-clearly faster, and accounts at their limit are left alone, including a Codex account that would otherwise keep
-running on paid credits. It uses usage data CPA already receives, without extra requests.
+A [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) plugin that routes Claude, Codex and Antigravity
+chats across your subscription accounts. It keeps CPA's session affinity and adds quota and cache awareness: new chats
+go where allowance is available and, for Claude, where their prompt is already cached, unless another account's weekly
+allowance is expiring clearly faster, and accounts at their limit are left alone, including a Codex account that would
+otherwise keep running on paid credits. For Claude and Codex it uses usage data CPA already receives, without extra
+requests.
 
 [How it works](docs/how-it-works.md) has the rules: warm chats stay put, new main chats are paced by weekly usage,
 and a chat's subagents stay together unless Claude Code's tool search (which defers MCP tools) is on. A Codex chat stays on
@@ -14,6 +15,20 @@ its account for up to 7 days idle, since Codex now keeps a logged-in user's cach
 move goes back to an account it has been on if it can. In Codex Pro and
 ProLite pools, work goes to the account that has used the least of its week, and an account that reports no credits
 is held at 98% so a 429 doesn't lock it out past an early reset.
+
+Google's [FAQ](https://antigravity.google/docs/faq) says that using third-party software to access Antigravity violates
+its Terms of Service and can get the account suspended or terminated, and that automated account rotation is not
+supported on consumer plans. The plugin places each Antigravity account's two allowances, one for Gemini models and one
+for Claude and GPT models ([usage](https://antigravity.google/docs/cli/commands/usage)), separately. Antigravity
+responses carry no quota, so while requests an Antigravity account could serve keep arriving, the plugin polls Google
+for that account's quota with the account's own access token, which it reads from the account's CPA auth file for each
+poll, uses for that poll only, and never refreshes or logs. Once a poll attempt shows the plugin can't read an account,
+because its auth file sets its own `proxy_url` or has no `project_id` or its polls keep failing, requests that account
+could serve are left to CPA's routing. An Antigravity chat keeps one account per allowance while it uses that allowance
+within the hour; the other Claude and Codex rules above don't apply to Antigravity. Antigravity routing is not
+benchmarked; [how it works](docs/how-it-works.md#antigravity) has the poll schedule and details. The Gemini providers
+(`gemini`, `aistudio`, `vertex`, `gemini-interactions`) are left to CPA, and so is any request whose candidates span
+providers, such as a model that both an Antigravity account and a Gemini API key serve.
 
 In a replay of ten days of the author's traffic on simulated accounts at 0.9× to 1.25× the assumed plan allowances,
 it used 1.0–2.1% less Claude quota per unit of work (quota spent divided by what the same requests cost as recorded)
@@ -39,7 +54,7 @@ including the [smaller gain](docs/benchmarks.md#expiring-allowance) with opening
 <a id="compatibility"></a>
 
 Built for **CPA v8.0.27 with native plugins enabled (CGO)**. Supported platforms:
-**linux/amd64, linux/arm64, darwin/arm64**. Configure your Claude/Codex accounts in CPA first.
+**linux/amd64, linux/arm64, darwin/arm64**. Configure your Claude/Codex/Antigravity accounts in CPA first.
 
 1. Merge this into CPA's `config.yaml`, keeping your existing settings and store sources:
 
@@ -70,12 +85,18 @@ the management status endpoint (`/plugins/paced-affinity/status`) is removed.
 <a id="configuration"></a>
 
 The plugin has no settings of its own; `enabled` and `priority` are CPA's. Keep `routing.session-affinity: true` so
-CPA's fallback routing stays sticky. Keep `model-level-cooling` false (CPA's default): the plugin relies on CPA benching the whole account after a usage-limit 429.
+CPA's fallback routing stays sticky. Keep `model-level-cooling` false (CPA's default): for Claude and Codex the
+plugin relies on CPA benching the whole account after a usage-limit 429. Antigravity has no such setting; CPA
+benches only the model that got the 429 ([how the plugin handles that](docs/how-it-works.md#antigravity)).
 
-Optionally, set each credential's CPA `weight` to its plan size (Claude Pro 1, Max (formerly Max 5x) 5, Ultra (formerly Max 20x) 20; Codex Pro 24,
-Business ProLite 10). The plugin uses it only as a first guess at the account's size, until usage headers have moved
-enough to measure it. In the replay, plan weights helped Claude slightly after plugin restarts and changed Codex
-credits by more than 0.1% only at 2× Codex capacity: 31% more with the plugin kept running, 4% fewer with a daily
-restart ([sensitivity](docs/benchmarks.md#sensitivity)). The Codex values follow the plugin's built-in prior of
-about $60 of GPT usage a week per weight unit; the replay's estimated weekly allowances put Pro and ProLite closer to
-19:10.
+Optionally, set each credential's CPA `weight` to its plan size (Claude Pro 1, Max (formerly Max 5x) 5, Ultra (formerly
+Max 20x) 20; Codex Pro 24, Business ProLite 10; Antigravity Pro 1, Ultra ($100) 5, Ultra ($200) 20
+([Google](https://antigravity.google/blog/changes-to-antigravity-plans)); Free, Plus and standard or promotional Pro
+trials have no published size, though Google gives those trials
+[a lower quota](https://antigravity.google/docs/plans#baseline-quota) than paid Pro, and without a weight the plugin
+starts them at Pro's).
+The plugin uses it only as a first guess at the account's size, until usage headers or polled quota have moved enough
+to measure it. In the replay, plan weights helped Claude slightly after plugin restarts and changed Codex credits by
+more than 0.1% only at 2× Codex capacity: 31% more with the plugin kept running, 4% fewer with a daily restart
+([sensitivity](docs/benchmarks.md#sensitivity)). The Codex values follow the plugin's built-in prior of about $60 of
+GPT usage a week per weight unit; the replay's estimated weekly allowances put Pro and ProLite closer to 19:10.

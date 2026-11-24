@@ -577,7 +577,7 @@ func TestExpiryUrgency(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := newRouter()
-			a := p.account("a", "claude", 20)
+			a := p.account("a", "claude", "", 20)
 			for i := range tt.quotas {
 				placementObserve(t, p, "claude", placementStep{sid: "seed", auth: "a", quota: &tt.quotas[i]})
 			}

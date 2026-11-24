@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"net/http"
 	"slices"
 	"strconv"
 	"sync"
@@ -10,7 +11,7 @@ import (
 )
 
 const (
-	affinityTTL    float64 = 60 // sliding: a warm chat is never moved voluntarily (Claude; Codex uses sessionTTL)
+	affinityTTL    float64 = 60 // sliding: a warm chat is never moved voluntarily (Claude, Antigravity; Codex: sessionTTL)
 	margin5h       float64 = 0.05
 	marginWeekly   float64 = 0.03
 	weeklyWeight   float64 = 2
@@ -20,6 +21,10 @@ const (
 	sessionTTL     float64 = 7 * 24 * 60 // forget idle sessions
 	creditReserve  float64 = 0.02        // weekly allowance a Codex account without credits keeps for probes
 	probeEvery     float64 = 180         // minutes between probes of a held, exhausted or unheard-from Codex account
+	pollServed     float64 = 1           // minutes between polls of an Antigravity account that served since the last poll
+	pollBlind      float64 = 15          // a failed poll this long after the last good one (or with none) sends picks to CPA
+	pollStale      float64 = 5           // age at which an Antigravity candidate's polled quota is refreshed
+	pollAfter429   float64 = 1.0 / 6     // minutes between polls of an Antigravity account answering with 429s
 )
 
 type session struct {
@@ -48,37 +53,53 @@ func (b *binding) live(t float64) bool {
 
 type router struct {
 	mu       sync.Mutex
-	accounts map[string]*account
-	pools    map[string][]*account // per provider, in registration order
+	accounts map[string]*account   // per auth and allowance
+	pools    map[string][]*account // per provider and allowance, in registration order
 	sessions map[string]*session
 	bindings map[string]*binding
+	polls    map[string]*poll // Antigravity, per auth
+	fetching sync.WaitGroup   // quota polls in flight
 	swept    float64
 }
 
 func newRouter() *router {
 	return &router{accounts: map[string]*account{}, pools: map[string][]*account{},
-		sessions: map[string]*session{}, bindings: map[string]*binding{}}
+		sessions: map[string]*session{}, bindings: map[string]*binding{}, polls: map[string]*poll{}}
 }
 
-func (r *router) account(id, provider string, weight float64) *account {
-	a := r.accounts[id]
+// account returns auth id's account for the allowance that suffix al names ("" outside Antigravity).
+func (r *router) account(id, provider, al string, weight float64) *account {
+	a := r.accounts[id+al]
 	if a == nil {
 		a = newAccount(id, provider)
-		r.accounts[id] = a
-		r.pools[provider] = append(r.pools[provider], a)
+		r.accounts[id+al] = a
+		r.pools[provider+al] = append(r.pools[provider+al], a)
 	}
 	a.setWeight(weight)
 	return a
 }
 
-// pick returns the account for this request and why: "affinity" (live binding), "placed" or "failover".
+// pick returns the account for this request and why: "affinity" (live binding), "placed" or "failover"; or no
+// account and the Antigravity candidate whose quota can't be read, for CPA to route.
 func (r *router) pick(provider, model, sid, parent string, own bool, cands []pluginapi.SchedulerAuthCandidate, t float64) (*account, string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sweep(t)
-	cs := make([]*account, len(cands))
+	al := allowance(provider, model)
+	cs, blind := make([]*account, len(cands)), ""
 	for i, c := range cands {
-		cs[i] = r.account(c.ID, provider, credentialWeight(c.Attributes))
+		w := credentialWeight(c.Attributes)
+		cs[i] = r.account(c.ID, provider, al, w)
+		if provider == "antigravity" {
+			p := r.pollState(c.ID)
+			p.weight = w
+			if r.poll(c.ID, t, map[bool]float64{false: pollStale, true: pollServed}[p.served]); p.blind {
+				blind = c.ID
+			}
+		}
+	}
+	if blind != "" {
+		return nil, blind // its quota can't be read, so it would read as unused and take every new chat
 	}
 	// Codex pools without five-hour windows (Pro, ProLite) hold accounts without credits short of their limit. Only a
 	// response shows a five-hour window, so a pool counts as one once every candidate has answered and no account in it,
@@ -95,6 +116,7 @@ func (r *router) pick(provider, model, sid, parent string, own bool, cands []plu
 		}
 	}
 	kind, key := sessionKey(sid, parent, own)
+	key, sid = key+al, sid+al // a chat's requests to each allowance are placed apart
 	reason := "placed"
 	if b := r.bindings[key]; b != nil && b.live(t) {
 		if slices.Contains(cs, b.acct) && !b.acct.exhausted(t) && (!weeklyOnly || slices.Contains(usable(cs, t), b.acct)) {
@@ -106,7 +128,7 @@ func (r *router) pick(provider, model, sid, parent string, own bool, cands []plu
 	if s := r.sessions[sid]; s != nil {
 		burn = s.rate(t)
 	} else {
-		burn = r.newSessionBurn(provider, t)
+		burn = r.newSessionBurn(provider+al, t)
 		if provider == "claude" && kind == kindMain {
 			choose = r.placeObservedWeekly // a new main chat
 		}
@@ -272,10 +294,10 @@ func weeklyPressure(cs []*account, t float64) float64 {
 	return min(max((tot/float64(len(cs))-gateLo)/(gateHi-gateLo), 0), 1)
 }
 
-// newSessionBurn forecasts a new session's burn as the mean burn per active main session.
-func (r *router) newSessionBurn(provider string, t float64) float64 {
+// newSessionBurn forecasts a new session's burn as the mean burn per active main session of a pool.
+func (r *router) newSessionBurn(pool string, t float64) float64 {
 	tot, n := 0.0, 0
-	for _, a := range r.pools[provider] {
+	for _, a := range r.pools[pool] {
 		tot += a.rateAbs(t)
 		n += a.nActive(t)
 	}
@@ -285,51 +307,35 @@ func (r *router) newSessionBurn(provider string, t float64) float64 {
 	return tot / float64(n)
 }
 
-// observe feeds one successful response's usage record into the account and session state. A 429 needs no
-// handling here: CPA keeps the account out of the candidates until the reset its headers announce.
+// observe feeds one successful response's usage record into the account and session state, and has an Antigravity
+// account polled after a 429. A Claude or Codex 429 needs no handling here: CPA keeps the account out of the candidates
+// until the reset its headers announce.
 func (r *router) observe(rec *pluginapi.UsageRecord, now float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	a := r.accounts[rec.AuthID]
+	t, sid := now/60, rec.SessionID
+	al := allowance(rec.Provider, rec.Alias)
+	a := r.accounts[rec.AuthID+al]
 	if a == nil || rec.Failed {
+		// CPA benches only the model that answered with the 429; the rest of its allowance has to be polled.
+		if a != nil && a.provider == "antigravity" && rec.Failure.StatusCode == http.StatusTooManyRequests {
+			r.poll(a.id, t, pollAfter429)
+		}
 		return
 	}
-	w5, wW := quotaWindows(a.provider, rec.ResponseHeaders, now)
-	if w5.ok || wW.ok {
-		a.has5h = w5.ok // e.g. Codex Plus: 5h window plus weekly; a verified Claude Ultra account reports weekly only
-	}
-	u5, r5, uW, rW := a.u5, a.r5, a.uW, a.rW // a missing header keeps the last observed value
-	if w5.ok {
-		u5, r5 = w5.util, w5.reset
-	}
-	if wW.ok {
-		uW, rW = wW.util, wW.reset
-	}
-	t, sid := now/60, rec.SessionID
 	// Records carry no request headers; only a subagent's own binding is keyed by its id.
-	kind, key := sessionKey(sid, rec.ParentSessionID, r.bindings[sid] != nil)
+	kind, key := sessionKey(sid, rec.ParentSessionID, r.bindings[sid+al] != nil)
+	key, sid = key+al, sid+al
 	a.seen[cacheKey(rec.Alias, kind)] = t // Alias is the model as the client named it, the key pick uses
 	cost := tokenCost(a, kind, rec.Detail)
-	var d5, dW float64 // the first observation (e.g. after a restart mid-window) only records the headers
-	if a.tObs >= 0 {
-		d5, dW = u5, uW // a new window counts from zero
-		if r5 == a.r5 {
-			d5 = u5 - a.u5
-		}
-		if rW == a.rW {
-			dW = uW - a.uW
-		}
-		d5, dW = max(d5, 0), max(dW, 0)
-		a.sumDu5 += d5
-		a.sumW5 += cost
-		a.sumDuW += dW
-		a.sumWW += cost
+	if a.provider == "antigravity" {
+		a.pending += cost // set against the next poll's movement
+		r.pollState(a.id).served = true
+		r.poll(a.id, t, pollServed)
+	} else {
+		w5, wW := quotaWindows(a.provider, rec.ResponseHeaders, now)
+		a.record(w5, wW, cost, t)
 	}
-	a.decay(t)
-	a.acc5 += d5
-	a.accWShort += dW
-	a.accWLong += dW
-	a.u5, a.r5, a.uW, a.rW, a.tObs = u5, r5, uW, rW, t
 	if v, err := strconv.ParseBool(rec.ResponseHeaders.Get("X-Codex-Credits-Has-Credits")); err == nil {
 		a.credits = map[bool]int{true: 1, false: -1}[v]
 	}
@@ -352,6 +358,8 @@ func (r *router) observe(rec *pluginapi.UsageRecord, now float64) {
 	}
 	if b := r.bindings[key]; b != nil {
 		b.acct, b.lastT = a, t
+	} else if a.provider == "antigravity" {
+		r.bindings[key] = &binding{a, t} // CPA routed it while a candidate was blind
 	}
 }
 

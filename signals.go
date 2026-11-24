@@ -81,14 +81,18 @@ func tokenCost(a *account, kind int, d pluginapi.UsageDetail) float64 {
 	w := a.tokenWeights
 	read := float64(d.CacheReadTokens)
 	write := float64(d.InputTokens + d.CacheCreationTokens) // Claude's input excludes cached tokens
-	if a.provider == "codex" {
-		write = max(float64(d.InputTokens)-read, 0) // Codex's input includes them
+	out := float64(d.OutputTokens)
+	if a.provider != "claude" {
+		write = max(float64(d.InputTokens)-read, 0) // Codex's and Antigravity's input includes them
+	}
+	if a.provider == "antigravity" {
+		out += float64(d.ReasoningTokens) // billed as output, reported apart from it
 	}
 	writeWeight := w[2]
 	if kind == kindMain {
 		writeWeight = w[1]
 	}
-	return (read*w[0] + write*writeWeight + float64(d.OutputTokens)*w[3]) * 1e-6
+	return (read*w[0] + write*writeWeight + out*w[3]) * 1e-6
 }
 
 type window struct {

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"sync"
 	"testing"
@@ -79,9 +80,33 @@ func TestPickFallsBackToBuiltin(t *testing.T) {
 			t.Errorf("%s: handled, picked %q", tt.name, got.AuthID)
 		}
 	}
-	if got := call[pluginapi.SchedulerPickResponse](t, newRouter(), pluginabi.MethodSchedulerPick,
-		pickRequest("claude", "claude:s1", "a", "b"), now); !got.Handled || got.AuthID == "" {
-		t.Errorf("a routed pick should be handled, got %+v", got)
+	// Only Antigravity accounts are polled, with their own credentials; the others report quota on their responses.
+	for _, provider := range []string{"claude", "codex", "antigravity"} {
+		p, f := newFakeQuotaHost(t)
+		got := call[pluginapi.SchedulerPickResponse](t, p, pluginabi.MethodSchedulerPick, pickRequest(provider, "s1", "a", "b"), now)
+		if !got.Handled || got.AuthID == "" {
+			t.Errorf("a routed %s pick should be handled, got %+v", provider, got)
+		}
+		call[struct{}](t, p, pluginabi.MethodUsageHandle, pluginapi.UsageRecord{Provider: provider, AuthID: got.AuthID, SessionID: "s1"}, now+30)
+		call[struct{}](t, p, pluginabi.MethodUsageHandle, pluginapi.UsageRecord{Provider: provider, AuthID: got.AuthID, SessionID: "s1",
+			Failed: true, Failure: pluginapi.UsageFailure{StatusCode: http.StatusTooManyRequests}}, now+60)
+		p.fetching.Wait()
+		if polled := f.polls["a"] + f.polls["b"]; (polled > 0) != (provider == "antigravity") {
+			t.Errorf("%s: %d quota polls", provider, polled)
+		}
+	}
+}
+
+func TestTokenCost(t *testing.T) {
+	d := pluginapi.UsageDetail{InputTokens: 10000, CacheReadTokens: 6000, CacheCreationTokens: 1000, OutputTokens: 300, ReasoningTokens: 200}
+	for provider, want := range map[string]float64{
+		"claude":      (6000*0.05 + 11000*2 + 300*5) * 1e-6,
+		"codex":       (6000*0.1 + 4000*1 + 300*5) * 1e-6,
+		"antigravity": (6000*0.05 + 4000*1 + 500*5) * 1e-6,
+	} {
+		if got := tokenCost(newAccount("a", provider), kindMain, d); math.Abs(got-want) > 1e-15 {
+			t.Errorf("%s: tokenCost = %v, want %v", provider, got, want)
+		}
 	}
 }
 

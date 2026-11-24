@@ -4,11 +4,11 @@
     {
       "id": "paced-affinity",
       "name": "Paced Affinity",
-      "description": "Routes Claude and Codex chats across subscription accounts: keeps chats and their subagents on warm caches, starts new chats where their prompt is cached and allowance is available, and stays off accounts at their limit.",
+      "description": "Routes Claude, Codex and Antigravity chats across subscription accounts: keeps Claude and Codex chats and their subagents on warm caches and Antigravity chats on their account, starts new chats where allowance is available and new Claude chats where their prompt is cached, and stays off accounts at their limit. Polls Google's quota endpoint for Antigravity accounts.",
       "author": "Pandoks",
       "repository": "https://github.com/Pandoks/cpa-plugin-paced-affinity",
       "homepage": "https://github.com/Pandoks/cpa-plugin-paced-affinity",
-      "tags": ["Scheduler", "Claude", "Codex", "Quota", "Prompt cache"],
+      "tags": ["Scheduler", "Claude", "Codex", "Antigravity", "Quota", "Prompt cache"],
       "install": { "type": "github-release" },
       "license": "MIT"
     }
